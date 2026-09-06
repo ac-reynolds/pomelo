@@ -1,16 +1,14 @@
+#include "renderer/vulkan_backend.hpp"
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
-
-#include <imgui.h>
-#include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_vulkan.h>
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -255,12 +253,12 @@ struct VulkanContext {
         }
     }
 
-    void render(ImDrawData* draw_data, SDL_Window* window) {
+    graphics::Frame begin_frame(SDL_Window* window) {
         if (!swapchain || extent.width == 0 || extent.height == 0)
-            return;
+            return {};
         uint32_t image_index = 0;
         VkResult acquire = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, image_acquired, VK_NULL_HANDLE, &image_index);
-        if (acquire == VK_ERROR_OUT_OF_DATE_KHR) { rebuild_swapchain(window); return; }
+        if (acquire == VK_ERROR_OUT_OF_DATE_KHR) { rebuild_swapchain(window); return {}; }
         if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) vk_check(acquire);
         Frame& frame = frames[image_index];
         vk_check(vkWaitForFences(device, 1, &frame.fence, VK_TRUE, UINT64_MAX));
@@ -277,7 +275,12 @@ struct VulkanContext {
         pass.clearValueCount = 1;
         pass.pClearValues = &clear;
         vkCmdBeginRenderPass(frame.command_buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
-        ImGui_ImplVulkan_RenderDrawData(draw_data, frame.command_buffer);
+        return {frame.command_buffer, image_index, true};
+    }
+
+    void end_frame(graphics::Frame token, SDL_Window* window) {
+        Frame& frame = frames[token.image_index];
+        const uint32_t image_index = token.image_index;
         vkCmdEndRenderPass(frame.command_buffer);
         vk_check(vkEndCommandBuffer(frame.command_buffer));
         VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -314,98 +317,57 @@ struct VulkanContext {
     }
 };
 
-void empty_panel(const char* name, ImVec2 position, ImVec2 size) {
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
-    ImGui::SetNextWindowPos(position);
-    ImGui::SetNextWindowSize(size);
-    ImGui::Begin(name, nullptr, flags);
-    ImGui::End();
-}
-
-void draw_layout() {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const ImVec2 origin = viewport->WorkPos;
-    const ImVec2 area = viewport->WorkSize;
-    constexpr float footer_height = 90.0f;
-    const float body_height = std::max(1.0f, area.y - footer_height);
-    const float left_width = std::clamp(area.x * 0.20f, 180.0f, 320.0f);
-    const float right_width = std::clamp(area.x * 0.24f, 220.0f, 380.0f);
-    empty_panel("Left", origin, {left_width, body_height});
-    empty_panel("Viewport", {origin.x + left_width, origin.y},
-                {std::max(1.0f, area.x - left_width - right_width), body_height});
-    empty_panel("Right", {origin.x + area.x - right_width, origin.y}, {right_width, body_height});
-    empty_panel("Footer", {origin.x, origin.y + body_height}, {area.x, footer_height});
-}
-
 } // namespace
 
-int main(int, char**) {
-    SDL_Window* window = nullptr;
+struct graphics::VulkanBackend::Impl {
+    SDL_Window* window{};
     VulkanContext vk;
-    try {
-        if (!SDL_Init(SDL_INIT_VIDEO)) fail(SDL_GetError());
-        window = SDL_CreateWindow("Pomelo", 1440, 900,
-                                  SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-        if (!window) fail(SDL_GetError());
-        vk.create(window);
+};
 
-        IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-        ImGui::StyleColorsDark();
-        ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        if (!ImGui_ImplSDL3_InitForVulkan(window)) fail("Could not initialize ImGui SDL backend");
-        ImGui_ImplVulkan_InitInfo init{};
-        init.ApiVersion = VK_API_VERSION_1_2;
-        init.Instance = vk.instance;
-        init.PhysicalDevice = vk.physical_device;
-        init.Device = vk.device;
-        init.QueueFamily = vk.queue_family;
-        init.Queue = vk.queue;
-        init.DescriptorPool = vk.descriptor_pool;
-        init.MinImageCount = 2;
-        init.ImageCount = static_cast<uint32_t>(vk.images.size());
-        init.PipelineInfoMain.RenderPass = vk.render_pass;
-        init.PipelineInfoMain.Subpass = 0;
-        init.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-        init.CheckVkResultFn = vk_check;
-        if (!ImGui_ImplVulkan_Init(&init)) fail("Could not initialize ImGui Vulkan backend");
+graphics::VulkanBackend::VulkanBackend(void* native_window) : impl_(std::make_unique<Impl>()) {
+    impl_->window = static_cast<SDL_Window*>(native_window);
+    impl_->vk.create(impl_->window);
 
-        bool running = true;
-        while (running) {
-            SDL_Event event;
-            while (SDL_PollEvent(&event)) {
-                ImGui_ImplSDL3_ProcessEvent(&event);
-                if (event.type == SDL_EVENT_QUIT ||
-                    (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)))
-                    running = false;
-            }
-            if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) {
-                SDL_Delay(10);
-                continue;
-            }
-            ImGui_ImplVulkan_NewFrame();
-            ImGui_ImplSDL3_NewFrame();
-            ImGui::NewFrame();
-            draw_layout();
-            ImGui::Render();
-            vk.render(ImGui::GetDrawData(), window);
-        }
-
-        vkDeviceWaitIdle(vk.device);
-        ImGui_ImplVulkan_Shutdown();
-        ImGui_ImplSDL3_Shutdown();
-        ImGui::DestroyContext();
-        vk.destroy();
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return EXIT_SUCCESS;
-    } catch (const std::exception& error) {
-        std::fprintf(stderr, "pomelo: %s\n", error.what());
-        vk.destroy();
-        if (window) SDL_DestroyWindow(window);
-        SDL_Quit();
-        return EXIT_FAILURE;
-    }
+    const BackendInfo backend = backend_info();
+    ImGui_ImplVulkan_InitInfo init{};
+    init.ApiVersion = VK_API_VERSION_1_2;
+    init.Instance = static_cast<VkInstance>(backend.instance);
+    init.PhysicalDevice = static_cast<VkPhysicalDevice>(backend.physical_device);
+    init.Device = static_cast<VkDevice>(backend.device);
+    init.QueueFamily = backend.queue_family;
+    init.Queue = static_cast<VkQueue>(backend.queue);
+    init.DescriptorPool = static_cast<VkDescriptorPool>(backend.descriptor_pool);
+    init.MinImageCount = 2;
+    init.ImageCount = backend.image_count;
+    init.PipelineInfoMain.RenderPass = static_cast<VkRenderPass>(backend.render_pass);
+    init.PipelineInfoMain.Subpass = 0;
+    init.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    init.CheckVkResultFn = vk_check;
+    if (!ImGui_ImplVulkan_Init(&init))
+        fail("Could not initialize ImGui Vulkan backend");
 }
+
+graphics::VulkanBackend::~VulkanBackend() {
+    if (impl_->vk.device) vkDeviceWaitIdle(impl_->vk.device);
+    ImGui_ImplVulkan_Shutdown();
+    impl_->vk.destroy();
+}
+graphics::VulkanBackend::VulkanBackend(VulkanBackend&&) noexcept = default;
+graphics::VulkanBackend& graphics::VulkanBackend::operator=(VulkanBackend&&) noexcept = default;
+
+graphics::BackendInfo graphics::VulkanBackend::backend_info() const {
+    const auto& vk = impl_->vk;
+    return {vk.instance, vk.physical_device, vk.device, vk.queue, vk.render_pass,
+            vk.descriptor_pool, vk.queue_family, static_cast<std::uint32_t>(vk.images.size())};
+}
+
+graphics::Frame graphics::VulkanBackend::begin_frame() {
+    return impl_->vk.begin_frame(impl_->window);
+}
+void graphics::VulkanBackend::begin_imgui_frame() { ImGui_ImplVulkan_NewFrame(); }
+void graphics::VulkanBackend::render_imgui(void* draw_data, void* command_buffer) {
+    ImGui_ImplVulkan_RenderDrawData(static_cast<ImDrawData*>(draw_data),
+                                   static_cast<VkCommandBuffer>(command_buffer));
+}
+void graphics::VulkanBackend::end_frame(Frame frame) { impl_->vk.end_frame(frame, impl_->window); }
+void graphics::VulkanBackend::wait_idle() { vkDeviceWaitIdle(impl_->vk.device); }

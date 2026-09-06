@@ -19,4 +19,20 @@ cmake --build build -j
 ./build/pomelo
 ```
 
-The first configure needs internet access to fetch the pinned dependencies. Scene rendering can later be recorded inside the render pass in `VulkanContext::render`, before the ImGui draw call.
+The first configure needs internet access to fetch the pinned dependencies. Scene
+rendering can later be recorded after `Renderer::begin_frame()` and before Chrome
+records its ImGui draw data.
+
+## Source layout
+
+- `src/platform`: SDL window/event ownership and the Dear ImGui SDL adapter
+- `src/chrome`: Dear ImGui core context, panel layout, and UI interaction state
+- `src/renderer/scene_renderer.*`: the isolated offscreen viewport producer
+- `src/renderer/vulkan_backend.*`: shared Vulkan state, swapchain presentation, and
+  the Dear ImGui Vulkan adapter
+- `src/application`: dependency-free orchestration policy connecting the layers
+
+The scene renderer currently returns an empty viewport image, matching the starter's
+intent not to draw scene content yet. Its output handle and viewport-size flow are in
+place for adding the offscreen image and scene pipeline without coupling scene code
+to the panel layout.

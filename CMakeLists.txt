@@ -34,22 +34,45 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
-add_library(imgui_lib STATIC
+add_library(imgui_core STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
-target_include_directories(imgui_lib PUBLIC
+target_include_directories(imgui_core PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
-target_link_libraries(imgui_lib PUBLIC SDL3::SDL3 Vulkan::Vulkan)
 
-add_executable(pomelo src/main.cpp)
-target_link_libraries(pomelo PRIVATE imgui_lib SDL3::SDL3 Vulkan::Vulkan)
+add_library(platform STATIC
+    src/platform/platform.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+)
+target_include_directories(platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(platform PRIVATE imgui_core SDL3::SDL3)
+
+add_library(vulkan_backend STATIC
+    src/renderer/vulkan_backend.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+)
+target_include_directories(vulkan_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(vulkan_backend PRIVATE imgui_core SDL3::SDL3 Vulkan::Vulkan)
+
+add_library(renderer STATIC src/renderer/scene_renderer.cpp)
+target_include_directories(renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(renderer PRIVATE vulkan_backend Vulkan::Vulkan)
+
+add_library(chrome STATIC src/chrome/chrome.cpp)
+target_include_directories(chrome PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(chrome PRIVATE imgui_core)
+
+add_library(application STATIC src/application/application.cpp)
+target_include_directories(application PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(application PUBLIC renderer chrome platform vulkan_backend)
+
+add_executable(pomelo src/application/main.cpp)
+target_link_libraries(pomelo PRIVATE application)
 
 if(MSVC)
     target_compile_options(pomelo PRIVATE /W4 /permissive-)
