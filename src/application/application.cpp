@@ -1,8 +1,8 @@
 #include "application/application.hpp"
 #include "chrome/chrome.hpp"
 #include "platform/platform.hpp"
-#include "renderer/scene_renderer.hpp"
-#include "renderer/vulkan_backend.hpp"
+#include "graphics/scene_renderer.hpp"
+#include "graphics/vulkan_backend.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -17,7 +17,7 @@ int application::Application::run() {
             platform.initialize_imgui_platform();
             try {
                 graphics::VulkanBackend graphics(platform.native_window());
-                renderer::SceneRenderer scene_renderer(graphics);
+                graphics::SceneRenderer scene_renderer(graphics);
                 chrome::ViewportState viewport{1, 1, false, false};
                 bool running = true;
                 while (running) {
@@ -27,7 +27,7 @@ int application::Application::run() {
                         platform.delay(10);
                         continue;
                     }
-                    const renderer::ViewportImage image = scene_renderer.render(viewport.width, viewport.height);
+                    const graphics::ViewportImage image = scene_renderer.render(viewport.width, viewport.height);
                     graphics.begin_imgui_frame();
                     platform.begin_imgui_frame();
                     chrome.begin_frame();

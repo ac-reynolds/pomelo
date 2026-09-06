@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace graphics {
+namespace graphics { // Shared scene and Vulkan rendering facilities.
 
 // Native handles are intentionally opaque here so Vulkan never leaks into
 // application code. Chrome unwraps them only in its private implementation.

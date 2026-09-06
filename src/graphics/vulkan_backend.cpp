@@ -1,4 +1,4 @@
-#include "renderer/vulkan_backend.hpp"
+#include "graphics/vulkan_backend.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>

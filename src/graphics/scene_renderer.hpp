@@ -4,7 +4,7 @@
 
 namespace graphics { class VulkanBackend; }
 
-namespace renderer {
+namespace graphics {
 
 struct ViewportImage { std::uint64_t texture_handle{}; };
 
@@ -17,4 +17,4 @@ private:
     graphics::VulkanBackend* graphics_{};
 };
 
-} // namespace renderer
+} // namespace graphics

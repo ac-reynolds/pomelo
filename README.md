@@ -27,8 +27,8 @@ records its ImGui draw data.
 
 - `src/platform`: SDL window/event ownership and the Dear ImGui SDL adapter
 - `src/chrome`: Dear ImGui core context, panel layout, and UI interaction state
-- `src/renderer/scene_renderer.*`: the isolated offscreen viewport producer
-- `src/renderer/vulkan_backend.*`: shared Vulkan state, swapchain presentation, and
+- `src/graphics/scene_renderer.*`: the isolated offscreen viewport producer
+- `src/graphics/vulkan_backend.*`: shared Vulkan state, swapchain presentation, and
   the Dear ImGui Vulkan adapter
 - `src/application`: dependency-free orchestration policy connecting the layers
 
