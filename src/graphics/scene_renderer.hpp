@@ -8,13 +8,6 @@ namespace graphics {
 
 struct ViewportImage { std::uint64_t texture_handle{}; };
 
-class SceneRenderer {
-public:
-    explicit SceneRenderer(graphics::VulkanBackend& graphics);
-    [[nodiscard]] ViewportImage render(int width, int height);
-
-private:
-    graphics::VulkanBackend* graphics_{};
-};
+[[nodiscard]] ViewportImage render_scene(VulkanBackend& graphics, int width, int height);
 
 } // namespace graphics

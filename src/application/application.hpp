@@ -2,10 +2,6 @@
 
 namespace application {
 
-class Application {
-public:
-    int run();
-};
+int run();
 
 } // namespace application
-

@@ -24,12 +24,14 @@ struct Frame {
     bool valid{};
 };
 
+// Owns one coherent Vulkan object graph. Its lifetime guarantees that child GPU
+// resources and the ImGui Vulkan adapter are destroyed before their device/instance.
 class VulkanBackend {
 public:
     explicit VulkanBackend(void* native_window);
     ~VulkanBackend();
-    VulkanBackend(VulkanBackend&&) noexcept;
-    VulkanBackend& operator=(VulkanBackend&&) noexcept;
+    VulkanBackend(VulkanBackend&&) = delete;
+    VulkanBackend& operator=(VulkanBackend&&) = delete;
     VulkanBackend(const VulkanBackend&) = delete;
     VulkanBackend& operator=(const VulkanBackend&) = delete;
 

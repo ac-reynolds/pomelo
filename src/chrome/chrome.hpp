@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 
 namespace chrome {
 
@@ -14,6 +13,8 @@ struct ViewportState {
     bool focused{};
 };
 
+// Owns the sole Dear ImGui context. The class prevents copying and guarantees all
+// UI frame operations occur while that context is alive.
 class Chrome {
 public:
     Chrome();
@@ -25,9 +26,6 @@ public:
     [[nodiscard]] ViewportState draw_layout(TextureHandle viewport_texture = {});
     [[nodiscard]] DrawData finalize_frame();
 
-private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace chrome

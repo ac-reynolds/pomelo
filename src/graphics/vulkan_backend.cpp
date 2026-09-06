@@ -352,9 +352,6 @@ graphics::VulkanBackend::~VulkanBackend() {
     ImGui_ImplVulkan_Shutdown();
     impl_->vk.destroy();
 }
-graphics::VulkanBackend::VulkanBackend(VulkanBackend&&) noexcept = default;
-graphics::VulkanBackend& graphics::VulkanBackend::operator=(VulkanBackend&&) noexcept = default;
-
 graphics::BackendInfo graphics::VulkanBackend::backend_info() const {
     const auto& vk = impl_->vk;
     return {vk.instance, vk.physical_device, vk.device, vk.queue, vk.render_pass,

@@ -1,10 +1,11 @@
 #pragma once
 
 #include <memory>
-#include <utility>
 
 namespace platform {
 
+// Owns the process-wide SDL video lifetime and its sole application window. The
+// class guarantees SDL outlives the window and the SDL ImGui adapter.
 class Platform {
 public:
     Platform();
@@ -27,4 +28,3 @@ private:
 };
 
 } // namespace platform
-

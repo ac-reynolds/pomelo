@@ -16,9 +16,7 @@ void empty_panel(const char* name, ImVec2 position, ImVec2 size) {
 
 } // namespace
 
-struct chrome::Chrome::Impl {};
-
-chrome::Chrome::Chrome() : impl_(std::make_unique<Impl>()) {
+chrome::Chrome::Chrome() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();

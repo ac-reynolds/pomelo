@@ -9,7 +9,7 @@
 #include <exception>
 #include <stdexcept>
 
-int application::Application::run() {
+int application::run() {
     try {
         platform::Platform platform;
         {
@@ -17,7 +17,6 @@ int application::Application::run() {
             platform.initialize_imgui_platform();
             try {
                 graphics::VulkanBackend graphics(platform.native_window());
-                graphics::SceneRenderer scene_renderer(graphics);
                 chrome::ViewportState viewport{1, 1, false, false};
                 bool running = true;
                 while (running) {
@@ -27,7 +26,7 @@ int application::Application::run() {
                         platform.delay(10);
                         continue;
                     }
-                    const graphics::ViewportImage image = scene_renderer.render(viewport.width, viewport.height);
+                    const graphics::ViewportImage image = graphics::render_scene(graphics, viewport.width, viewport.height);
                     graphics.begin_imgui_frame();
                     platform.begin_imgui_frame();
                     chrome.begin_frame();
