@@ -1,12 +1,14 @@
 # Pomelo
 
-A minimal C++20 starter for SDL3, Vulkan, and Dear ImGui. It opens a four-region editor shell with empty left, center viewport, right, and footer panels. Vulkan owns the instance, device, presentation queue, swapchain, render pass, command buffers, and synchronization; only ImGui is drawn for now.
+A minimal C++20 starter for SDL3, Vulkan, and Dear ImGui. It opens a four-region editor shell with a rotating cube in the center viewport and empty left, right, and footer panels. Vulkan renders the cube into an offscreen color/depth target, then ImGui displays it in the viewport.
 
 ## Prerequisites
 
 - CMake 3.24+
 - A C++20 compiler
+- Python 3 (for shader embedding during the build)
 - Vulkan headers, loader, and a working Vulkan driver
+- `glslc` (from the Vulkan SDK or your distribution's shader compiler package)
 - Git (SDL3 and ImGui are fetched during the first configure)
 
 On Ubuntu/Debian, the Vulkan development dependency is typically `libvulkan-dev`. SDL3 and ImGui do not need to be installed system-wide.
@@ -19,9 +21,17 @@ cmake --build build -j
 ./build/pomelo
 ```
 
-The first configure needs internet access to fetch the pinned dependencies. Scene
-rendering can later be recorded after `Renderer::begin_frame()` and before Chrome
-records its ImGui draw data.
+The first configure needs internet access to fetch the pinned dependencies.
+CMake compiles GLSL from `shaders/` to SPIR-V, then runs
+`deployment/embed_spirv.py` to generate C++ headers under `build/generated/`.
+Shader source or script changes regenerate those headers automatically. The
+executable includes the compiled shaders and can run from any working directory.
+
+The embedding script can also be run independently:
+
+```sh
+python3 deployment/embed_spirv.py build/generated/cube_vert.spv /tmp/cube_vert.hpp --symbol cube_vert_spirv
+```
 
 ## Source layout
 
@@ -31,8 +41,5 @@ records its ImGui draw data.
 - `src/graphics/vulkan_backend.*`: shared Vulkan state, swapchain presentation, and
   the Dear ImGui Vulkan adapter
 - `src/application`: dependency-free orchestration policy connecting the layers
-
-The scene renderer currently returns an empty viewport image, matching the starter's
-intent not to draw scene content yet. Its output handle and viewport-size flow are in
-place for adding the offscreen image and scene pipeline without coupling scene code
-to the panel layout.
+- `shaders`: cube vertex and fragment GLSL sources
+- `deployment`: build and deployment helper scripts

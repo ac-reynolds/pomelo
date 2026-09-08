@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(FetchContent)
 
 find_package(Vulkan REQUIRED COMPONENTS glslc)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 FetchContent_Declare(
     SDL
@@ -70,10 +71,10 @@ foreach(stage vert frag)
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated
         COMMAND Vulkan::glslc --target-env=vulkan1.2
                 ${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.${stage} -o ${spirv}
-        COMMAND ${CMAKE_COMMAND} -DINPUT=${spirv} -DOUTPUT=${header}
-                -DSYMBOL=cube_${stage}_spirv -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_spirv.cmake
+        COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/deployment/embed_spirv.py
+                ${spirv} ${header} --symbol cube_${stage}_spirv
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.${stage}
-                ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_spirv.cmake
+                ${CMAKE_CURRENT_SOURCE_DIR}/deployment/embed_spirv.py
         VERBATIM
     )
     target_sources(scene_renderer PRIVATE ${header})
