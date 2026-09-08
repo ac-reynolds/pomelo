@@ -23,14 +23,14 @@ cmake --build build -j
 
 The first configure needs internet access to fetch the pinned dependencies.
 CMake compiles GLSL from `shaders/` to SPIR-V, then runs
-`deployment/embed_spirv.py` to generate C++ headers under `build/generated/`.
-Shader source or script changes regenerate those headers automatically. The
+`deployment/embed_spirv.py` to generate C++ source files under `build/generated/`.
+Shader source or script changes regenerate those files automatically, which are compiled into `scene_renderer`. The
 executable includes the compiled shaders and can run from any working directory.
 
 The embedding script can also be run independently:
 
 ```sh
-python3 deployment/embed_spirv.py build/generated/cube_vert.spv /tmp/cube_vert.hpp --symbol cube_vert_spirv
+python3 deployment/embed_spirv.py build/generated/cube_vert.spv /tmp/cube_vert.cpp --symbol cube_vert_spirv --header graphics/shaders.hpp
 ```
 
 ## Source layout

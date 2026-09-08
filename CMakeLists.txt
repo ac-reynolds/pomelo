@@ -63,21 +63,21 @@ target_link_libraries(vulkan_backend PRIVATE scene_renderer imgui_core SDL3::SDL
 add_library(scene_renderer STATIC src/graphics/scene_renderer.cpp)
 target_include_directories(scene_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(scene_renderer PRIVATE Vulkan::Vulkan)
-target_include_directories(scene_renderer PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 foreach(stage vert frag)
     set(spirv ${CMAKE_CURRENT_BINARY_DIR}/generated/cube_${stage}.spv)
-    set(header ${CMAKE_CURRENT_BINARY_DIR}/generated/cube_${stage}.hpp)
-    add_custom_command(OUTPUT ${spirv} ${header}
+    set(source ${CMAKE_CURRENT_BINARY_DIR}/generated/cube_${stage}.cpp)
+    add_custom_command(OUTPUT ${spirv} ${source}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated
         COMMAND Vulkan::glslc --target-env=vulkan1.2
                 ${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.${stage} -o ${spirv}
         COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/deployment/embed_spirv.py
-                ${spirv} ${header} --symbol cube_${stage}_spirv
+                ${spirv} ${source} --symbol cube_${stage}_spirv
+                --header graphics/shaders.hpp
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.${stage}
                 ${CMAKE_CURRENT_SOURCE_DIR}/deployment/embed_spirv.py
         VERBATIM
     )
-    target_sources(scene_renderer PRIVATE ${header})
+    target_sources(scene_renderer PRIVATE ${source})
 endforeach()
 
 add_library(chrome STATIC src/chrome/chrome.cpp)

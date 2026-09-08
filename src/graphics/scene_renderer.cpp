@@ -1,10 +1,10 @@
 #include "graphics/scene_renderer.hpp"
-#include "cube_vert.hpp"
-#include "cube_frag.hpp"
+#include "graphics/shaders.hpp"
 
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -191,10 +191,10 @@ void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, Vk
         layout.pPushConstantRanges = &constants;
         check(vkCreatePipelineLayout(device, &layout, nullptr, &scene.layout));
         VkShaderModuleCreateInfo module{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        module.codeSize = sizeof(cube_vert_spirv);
+        module.codeSize = cube_vert_spirv_size;
         module.pCode = cube_vert_spirv;
         check(vkCreateShaderModule(device, &module, nullptr, &vertex_shader));
-        module.codeSize = sizeof(cube_frag_spirv);
+        module.codeSize = cube_frag_spirv_size;
         module.pCode = cube_frag_spirv;
         check(vkCreateShaderModule(device, &module, nullptr, &fragment_shader));
         std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
