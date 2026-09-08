@@ -46,13 +46,6 @@ target_include_directories(imgui_core PUBLIC
     ${imgui_SOURCE_DIR}/backends
 )
 
-add_library(platform STATIC
-    src/platform/platform.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-)
-target_include_directories(platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(platform PRIVATE imgui_core SDL3::SDL3)
-
 add_library(vulkan_backend STATIC
     src/graphics/vulkan_backend.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
@@ -84,9 +77,14 @@ add_library(chrome STATIC src/chrome/chrome.cpp)
 target_include_directories(chrome PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(chrome PRIVATE imgui_core)
 
-add_library(application STATIC src/application/application.cpp)
+add_library(application STATIC
+    src/application/application.cpp
+    src/application/window.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+)
 target_include_directories(application PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(application PUBLIC scene_renderer chrome platform vulkan_backend)
+target_link_libraries(application PUBLIC scene_renderer chrome vulkan_backend
+    PRIVATE imgui_core SDL3::SDL3)
 
 add_executable(pomelo src/application/main.cpp)
 target_link_libraries(pomelo PRIVATE application)

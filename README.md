@@ -35,11 +35,10 @@ python3 deployment/embed_spirv.py build/generated/cube_vert.spv /tmp/cube_vert.c
 
 ## Source layout
 
-- `src/platform`: SDL window/event ownership and the Dear ImGui SDL adapter
 - `src/chrome`: Dear ImGui core context, panel layout, and UI interaction state
 - `src/graphics/scene_renderer.*`: the isolated offscreen viewport producer
 - `src/graphics/vulkan_backend.*`: shared Vulkan state, swapchain presentation, and
   the Dear ImGui Vulkan adapter
-- `src/application`: dependency-free orchestration policy connecting the layers
+- `src/application`: application loop, SDL window/event ownership, and the Dear ImGui SDL adapter
 - `shaders`: cube vertex and fragment GLSL sources
 - `deployment`: build and deployment helper scripts

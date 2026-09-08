@@ -1,19 +1,19 @@
 #pragma once
 
-#include <memory>
+struct SDL_Window;
 
-namespace platform {
+namespace application {
 
 // Owns the process-wide SDL video lifetime and its sole application window. The
 // class guarantees SDL outlives the window and the SDL ImGui adapter.
-class Platform {
+class Window {
 public:
-    Platform();
-    ~Platform();
-    Platform(const Platform&) = delete;
-    Platform& operator=(const Platform&) = delete;
+    Window();
+    ~Window();
+    Window(const Window&) = delete;
+    Window& operator=(const Window&) = delete;
 
-    [[nodiscard]] void* native_window() const;
+    [[nodiscard]] SDL_Window* native_window() const;
     [[nodiscard]] bool poll_events();
     [[nodiscard]] bool minimized() const;
     void delay(unsigned milliseconds) const;
@@ -23,8 +23,8 @@ public:
     void shutdown_imgui_platform();
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+    SDL_Window* window_{};
+    bool imgui_initialized_{};
 };
 
-} // namespace platform
+} // namespace application
