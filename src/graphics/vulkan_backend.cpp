@@ -385,12 +385,13 @@ struct graphics::VulkanBackend::Impl {
     VulkanContext vk;
 };
 
-graphics::VulkanBackend::VulkanBackend(void* native_window) : impl_(std::make_unique<Impl>()) {
+graphics::VulkanBackend::VulkanBackend(void* native_window, const geometry::UniformGrid& grid) : impl_(std::make_unique<Impl>()) {
     impl_->window = static_cast<SDL_Window*>(native_window);
     try {
         impl_->vk.create(impl_->window);
         impl_->vk.initialize_imgui();
-        create_scene(impl_->vk.scene, impl_->vk.physical_device, impl_->vk.device);
+        create_scene(impl_->vk.scene, impl_->vk.physical_device, impl_->vk.device,
+                     impl_->vk.queue, impl_->vk.queue_family, grid);
     } catch (...) {
         impl_->vk.destroy();
         throw;

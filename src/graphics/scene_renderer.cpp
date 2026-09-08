@@ -1,5 +1,6 @@
 #include "graphics/scene_renderer.hpp"
 #include "graphics/shaders.hpp"
+#include "geometry/uniform_grid.hpp"
 
 #include <array>
 #include <cmath>
@@ -35,20 +36,20 @@ VkFormat supported_format(VkPhysicalDevice physical, std::initializer_list<VkFor
     throw std::runtime_error("No supported offscreen attachment format");
 }
 
-struct Vertex { float position[3]; float color[3]; };
+struct Vertex { float position[3]; float uv[2]; };
 constexpr std::array<Vertex, 24> vertices{{
-    {{-1,-1, 1}, {0.95f,0.32f,0.20f}}, {{ 1,-1, 1}, {0.95f,0.32f,0.20f}},
-    {{ 1, 1, 1}, {0.95f,0.32f,0.20f}}, {{-1, 1, 1}, {0.95f,0.32f,0.20f}},
-    {{ 1,-1,-1}, {0.25f,0.65f,0.95f}}, {{-1,-1,-1}, {0.25f,0.65f,0.95f}},
-    {{-1, 1,-1}, {0.25f,0.65f,0.95f}}, {{ 1, 1,-1}, {0.25f,0.65f,0.95f}},
-    {{ 1,-1, 1}, {0.95f,0.70f,0.18f}}, {{ 1,-1,-1}, {0.95f,0.70f,0.18f}},
-    {{ 1, 1,-1}, {0.95f,0.70f,0.18f}}, {{ 1, 1, 1}, {0.95f,0.70f,0.18f}},
-    {{-1,-1,-1}, {0.55f,0.35f,0.90f}}, {{-1,-1, 1}, {0.55f,0.35f,0.90f}},
-    {{-1, 1, 1}, {0.55f,0.35f,0.90f}}, {{-1, 1,-1}, {0.55f,0.35f,0.90f}},
-    {{-1, 1, 1}, {0.30f,0.85f,0.50f}}, {{ 1, 1, 1}, {0.30f,0.85f,0.50f}},
-    {{ 1, 1,-1}, {0.30f,0.85f,0.50f}}, {{-1, 1,-1}, {0.30f,0.85f,0.50f}},
-    {{-1,-1,-1}, {0.20f,0.75f,0.80f}}, {{ 1,-1,-1}, {0.20f,0.75f,0.80f}},
-    {{ 1,-1, 1}, {0.20f,0.75f,0.80f}}, {{-1,-1, 1}, {0.20f,0.75f,0.80f}},
+    {{-1,-1, 1}, {0,0}}, {{ 1,-1, 1}, {1,0}},
+    {{ 1, 1, 1}, {1,1}}, {{-1, 1, 1}, {0,1}},
+    {{ 1,-1,-1}, {0,0}}, {{-1,-1,-1}, {1,0}},
+    {{-1, 1,-1}, {1,1}}, {{ 1, 1,-1}, {0,1}},
+    {{ 1,-1, 1}, {0,0}}, {{ 1,-1,-1}, {1,0}},
+    {{ 1, 1,-1}, {1,1}}, {{ 1, 1, 1}, {0,1}},
+    {{-1,-1,-1}, {0,0}}, {{-1,-1, 1}, {1,0}},
+    {{-1, 1, 1}, {1,1}}, {{-1, 1,-1}, {0,1}},
+    {{-1, 1, 1}, {0,0}}, {{ 1, 1, 1}, {1,0}},
+    {{ 1, 1,-1}, {1,1}}, {{-1, 1,-1}, {0,1}},
+    {{-1,-1,-1}, {0,0}}, {{ 1,-1,-1}, {1,0}},
+    {{ 1,-1, 1}, {1,1}}, {{-1,-1, 1}, {0,1}},
 }};
 constexpr auto indices = [] {
     std::array<uint16_t, 36> result{};
@@ -61,6 +62,8 @@ constexpr auto indices = [] {
 
 // Column-major matrices, multiplied by column vectors in the vertex shader.
 using Matrix = std::array<float, 16>;
+struct Transform { Matrix mvp; std::array<float, 4> origin_spacing; };
+static_assert(offsetof(Transform, origin_spacing) == 64 && sizeof(Transform) == 80);
 Matrix multiply(const Matrix& a, const Matrix& b) {
     Matrix result{};
     for (size_t col = 0; col < 4; ++col)
@@ -104,11 +107,169 @@ void destroy_image(graphics::SceneImage& image, VkDevice device) {
     image = {};
 }
 
+void upload_grid(graphics::SceneResources& scene, VkPhysicalDevice physical, VkDevice device,
+                 VkQueue queue, uint32_t queue_family, const geometry::UniformGrid& grid) {
+    geometry::validate_grid(grid);
+    if (grid.values.size() > static_cast<size_t>(INT32_MAX))
+        throw std::invalid_argument("Grid exceeds shader instance index range");
+    constexpr VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VkImageFormatProperties supported{};
+    check(vkGetPhysicalDeviceImageFormatProperties(physical, VK_FORMAT_R32_SFLOAT, VK_IMAGE_TYPE_3D,
+                                                   VK_IMAGE_TILING_OPTIMAL, usage, 0, &supported));
+    const VkExtent3D extent{grid.dimensions[0], grid.dimensions[1], grid.dimensions[2]};
+    if (extent.width > supported.maxExtent.width || extent.height > supported.maxExtent.height ||
+        extent.depth > supported.maxExtent.depth)
+        throw std::invalid_argument("Grid exceeds Vulkan 3D image limits");
+    scene.cell_count = static_cast<uint32_t>(grid.values.size());
+    double radius_squared = 0;
+    for (size_t axis = 0; axis < 3; ++axis) {
+        scene.origin_spacing[axis] = grid.origin[axis];
+        const double half = 0.5 * grid.spacing * grid.dimensions[axis];
+        scene.center[axis] = static_cast<float>(grid.origin[axis] + half);
+        radius_squared += half * half;
+    }
+    scene.origin_spacing[3] = grid.spacing;
+    scene.radius = static_cast<float>(std::sqrt(radius_squared));
+    if (!std::isfinite(scene.radius) || scene.radius <= 0)
+        throw std::invalid_argument("Grid bounds cannot be represented for rendering");
+
+    VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    image.imageType = VK_IMAGE_TYPE_3D;
+    image.format = VK_FORMAT_R32_SFLOAT;
+    image.extent = extent;
+    image.mipLevels = image.arrayLayers = 1;
+    image.samples = VK_SAMPLE_COUNT_1_BIT;
+    image.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image.usage = usage;
+    check(vkCreateImage(device, &image, nullptr, &scene.grid_image.image));
+    VkMemoryRequirements requirements{};
+    vkGetImageMemoryRequirements(device, scene.grid_image.image, &requirements);
+    VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocation.allocationSize = requirements.size;
+    allocation.memoryTypeIndex = memory_type(physical, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    check(vkAllocateMemory(device, &allocation, nullptr, &scene.grid_image.memory));
+    check(vkBindImageMemory(device, scene.grid_image.image, scene.grid_image.memory, 0));
+    VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    view.image = scene.grid_image.image;
+    view.viewType = VK_IMAGE_VIEW_TYPE_3D;
+    view.format = VK_FORMAT_R32_SFLOAT;
+    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    check(vkCreateImageView(device, &view, nullptr, &scene.grid_image.view));
+
+    VkBuffer staging{};
+    VkDeviceMemory staging_memory{};
+    VkCommandPool pool{};
+    VkFence fence{};
+    bool submitted = false;
+    auto cleanup = [&] {
+        if (fence) vkDestroyFence(device, fence, nullptr);
+        if (pool) vkDestroyCommandPool(device, pool, nullptr);
+        if (staging) vkDestroyBuffer(device, staging, nullptr);
+        if (staging_memory) vkFreeMemory(device, staging_memory, nullptr);
+    };
+    try {
+        VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        buffer.size = grid.values.size() * sizeof(float);
+        buffer.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        check(vkCreateBuffer(device, &buffer, nullptr, &staging));
+        vkGetBufferMemoryRequirements(device, staging, &requirements);
+        allocation.allocationSize = requirements.size;
+        allocation.memoryTypeIndex = memory_type(physical, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+        check(vkAllocateMemory(device, &allocation, nullptr, &staging_memory));
+        check(vkBindBufferMemory(device, staging, staging_memory, 0));
+        void* mapped{};
+        check(vkMapMemory(device, staging_memory, 0, VK_WHOLE_SIZE, 0, &mapped));
+        std::memcpy(mapped, grid.values.data(), static_cast<size_t>(buffer.size));
+        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+        range.memory = staging_memory;
+        range.size = VK_WHOLE_SIZE;
+        const VkResult flushed = vkFlushMappedMemoryRanges(device, 1, &range);
+        vkUnmapMemory(device, staging_memory);
+        check(flushed);
+        VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        pool_info.queueFamilyIndex = queue_family;
+        check(vkCreateCommandPool(device, &pool_info, nullptr, &pool));
+        VkCommandBufferAllocateInfo commands{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        commands.commandPool = pool;
+        commands.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        commands.commandBufferCount = 1;
+        VkCommandBuffer command{};
+        check(vkAllocateCommandBuffers(device, &commands, &command));
+        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(vkBeginCommandBuffer(command, &begin));
+        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = scene.grid_image.image;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageExtent = extent;
+        vkCmdCopyBufferToImage(command, staging, scene.grid_image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+        check(vkEndCommandBuffer(command));
+        VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        check(vkCreateFence(device, &fence_info, nullptr, &fence));
+        VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &command;
+        check(vkQueueSubmit(queue, 1, &submit, fence));
+        submitted = true;
+        check(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
+    } catch (...) {
+        if (submitted) vkDeviceWaitIdle(device);
+        cleanup();
+        throw;
+    }
+    cleanup();
+
+    VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sampler.magFilter = sampler.minFilter = VK_FILTER_NEAREST;
+    sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    check(vkCreateSampler(device, &sampler, nullptr, &scene.grid_sampler));
+    VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layout.bindingCount = 1;
+    layout.pBindings = &binding;
+    check(vkCreateDescriptorSetLayout(device, &layout, nullptr, &scene.grid_layout));
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolCreateInfo descriptor_pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    descriptor_pool.maxSets = descriptor_pool.poolSizeCount = 1;
+    descriptor_pool.pPoolSizes = &size;
+    check(vkCreateDescriptorPool(device, &descriptor_pool, nullptr, &scene.grid_pool));
+    VkDescriptorSetAllocateInfo descriptor{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    descriptor.descriptorPool = scene.grid_pool;
+    descriptor.descriptorSetCount = 1;
+    descriptor.pSetLayouts = &scene.grid_layout;
+    check(vkAllocateDescriptorSets(device, &descriptor, &scene.grid_set));
+    VkDescriptorImageInfo image_binding{scene.grid_sampler, scene.grid_image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = scene.grid_set;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &image_binding;
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+}
+
 } // namespace
 
-void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, VkDevice device) {
+void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, VkDevice device,
+                            VkQueue queue, uint32_t queue_family, const geometry::UniformGrid& grid) {
     VkShaderModule vertex_shader{}, fragment_shader{};
     try {
+        upload_grid(scene, physical, device, queue, queue_family, grid);
         scene.color_format = supported_format(physical, {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM},
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
             VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
@@ -185,8 +346,10 @@ void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, Vk
         pass.pDependencies = dependencies.data();
         check(vkCreateRenderPass(device, &pass, nullptr, &scene.render_pass));
 
-        VkPushConstantRange constants{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Matrix)};
+        VkPushConstantRange constants{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(Transform)};
         VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        layout.setLayoutCount = 1;
+        layout.pSetLayouts = &scene.grid_layout;
         layout.pushConstantRangeCount = 1;
         layout.pPushConstantRanges = &constants;
         check(vkCreatePipelineLayout(device, &layout, nullptr, &scene.layout));
@@ -207,7 +370,7 @@ void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, Vk
         VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
         std::array<VkVertexInputAttributeDescription, 2> attributes{{
             {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
-            {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)},
+            {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)},
         }};
         VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
         input.vertexBindingDescriptionCount = 1;
@@ -268,6 +431,10 @@ void graphics::destroy_scene(SceneResources& scene, VkDevice device) {
     if (scene.render_pass) vkDestroyRenderPass(device, scene.render_pass, nullptr);
     if (scene.mesh) vkDestroyBuffer(device, scene.mesh, nullptr);
     if (scene.mesh_memory) vkFreeMemory(device, scene.mesh_memory, nullptr);
+    if (scene.grid_pool) vkDestroyDescriptorPool(device, scene.grid_pool, nullptr);
+    if (scene.grid_layout) vkDestroyDescriptorSetLayout(device, scene.grid_layout, nullptr);
+    if (scene.grid_sampler) vkDestroySampler(device, scene.grid_sampler, nullptr);
+    destroy_image(scene.grid_image, device);
     scene = {};
 }
 
@@ -309,17 +476,21 @@ void graphics::record_scene(const SceneResources& scene, const SceneTarget& targ
     const Matrix rotation_y{c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1};
     const Matrix rotation_x{1,0,0,0, 0,ct,st,0, 0,-st,ct,0, 0,0,0,1};
     const float aspect = static_cast<float>(target.extent.width) / target.extent.height;
-    // Fit the cube even in a portrait viewport. The camera looks down -Z.
-    const float distance = 5.5f / std::fmin(aspect, 1.0f);
+    // Fit the domain's bounding sphere in the narrower field of view.
+    const float half_fov = std::atan(std::tan(0.785398163f * 0.5f) * std::fmin(aspect, 1.0f));
+    const float distance = 1.1f * scene.radius / std::sin(half_fov);
     const Matrix view{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,-distance,1};
-    constexpr float near_plane = 0.1f;
-    const float far_plane = distance + 10.0f;
+    const float near_plane = distance - 1.5f * scene.radius;
+    const float far_plane = distance + 1.5f * scene.radius;
     const float f = 1.0f / std::tan(0.785398163f * 0.5f);
     // Flip Y for Vulkan's positive-height viewport; depth maps to [0, 1].
     const Matrix projection{f/aspect,0,0,0, 0,-f,0,0,
         0,0,far_plane/(near_plane-far_plane),-1,
         0,0,near_plane*far_plane/(near_plane-far_plane),0};
-    const Matrix mvp = multiply(projection, multiply(view, multiply(rotation_x, rotation_y)));
+    const Matrix center{1,0,0,0, 0,1,0,0, 0,0,1,0, -scene.center[0],-scene.center[1],-scene.center[2],1};
+    const Matrix mvp = multiply(projection, multiply(view, multiply(multiply(rotation_x, rotation_y), center)));
+    const Transform transform{mvp, {scene.origin_spacing[0], scene.origin_spacing[1],
+                                    scene.origin_spacing[2], scene.origin_spacing[3]}};
     std::array<VkClearValue, 2> clear{};
     clear[0].color = {{0.055f, 0.065f, 0.085f, 1.0f}};
     clear[1].depthStencil = {1.0f, 0};
@@ -338,7 +509,9 @@ void graphics::record_scene(const SceneResources& scene, const SceneTarget& targ
     const VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(command_buffer, 0, 1, &scene.mesh, &offset);
     vkCmdBindIndexBuffer(command_buffer, scene.mesh, sizeof(vertices), VK_INDEX_TYPE_UINT16);
-    vkCmdPushConstants(command_buffer, scene.layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mvp), mvp.data());
-    vkCmdDrawIndexed(command_buffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene.layout,
+                            0, 1, &scene.grid_set, 0, nullptr);
+    vkCmdPushConstants(command_buffer, scene.layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(transform), &transform);
+    vkCmdDrawIndexed(command_buffer, static_cast<uint32_t>(indices.size()), scene.cell_count, 0, 0, 0);
     vkCmdEndRenderPass(command_buffer);
 }

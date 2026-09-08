@@ -53,9 +53,12 @@ add_library(vulkan_backend STATIC
 target_include_directories(vulkan_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vulkan_backend PRIVATE scene_renderer imgui_core SDL3::SDL3 Vulkan::Vulkan)
 
+add_library(geometry STATIC src/geometry/uniform_grid.cpp)
+target_include_directories(geometry PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_library(scene_renderer STATIC src/graphics/scene_renderer.cpp)
 target_include_directories(scene_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(scene_renderer PRIVATE Vulkan::Vulkan)
+target_link_libraries(scene_renderer PRIVATE geometry Vulkan::Vulkan)
 foreach(stage vert frag)
     set(spirv ${CMAKE_CURRENT_BINARY_DIR}/generated/cube_${stage}.spv)
     set(source ${CMAKE_CURRENT_BINARY_DIR}/generated/cube_${stage}.cpp)
@@ -84,7 +87,7 @@ add_library(application STATIC
 )
 target_include_directories(application PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(application PUBLIC scene_renderer chrome vulkan_backend
-    PRIVATE imgui_core SDL3::SDL3)
+    PRIVATE geometry imgui_core SDL3::SDL3)
 
 add_executable(pomelo src/application/main.cpp)
 target_link_libraries(pomelo PRIVATE application)
@@ -93,4 +96,11 @@ if(MSVC)
     target_compile_options(pomelo PRIVATE /W4 /permissive-)
 else()
     target_compile_options(pomelo PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(uniform_grid_test tests/uniform_grid_test.cpp)
+    target_link_libraries(uniform_grid_test PRIVATE geometry)
+    add_test(NAME uniform_grid COMMAND uniform_grid_test)
 endif()

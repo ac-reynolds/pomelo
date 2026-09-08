@@ -2,6 +2,7 @@
 #include "chrome/chrome.hpp"
 #include "application/window.hpp"
 #include "graphics/vulkan_backend.hpp"
+#include "geometry/uniform_grid.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -16,7 +17,8 @@ int application::run() {
             chrome::Chrome chrome;
             window.initialize_imgui_platform();
             try {
-                graphics::VulkanBackend graphics(window.native_window());
+                const auto grid = geometry::generate_sinusoidal_grid({24, 24, 24}, {-1, -1, -1}, 2.0f / 24);
+                graphics::VulkanBackend graphics(window.native_window(), grid);
                 chrome::ViewportState viewport{1, 1, false, false};
                 const auto start = std::chrono::steady_clock::now();
                 bool running = true;

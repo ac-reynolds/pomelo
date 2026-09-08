@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <memory>
 
+namespace geometry { struct UniformGrid; }
+
 namespace graphics { // Shared scene and Vulkan rendering facilities.
 
 // Native handles are intentionally opaque here so Vulkan never leaks into
@@ -29,7 +31,7 @@ struct Frame {
 // resources and the ImGui Vulkan adapter are destroyed before their device/instance.
 class VulkanBackend {
 public:
-    explicit VulkanBackend(void* native_window);
+    VulkanBackend(void* native_window, const geometry::UniformGrid& grid);
     ~VulkanBackend();
     VulkanBackend(VulkanBackend&&) = delete;
     VulkanBackend& operator=(VulkanBackend&&) = delete;

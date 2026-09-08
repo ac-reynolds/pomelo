@@ -4,6 +4,8 @@
 // for GPU completion before calling the destruction functions.
 #include <vulkan/vulkan.h>
 
+namespace geometry { struct UniformGrid; }
+
 namespace graphics {
 
 struct SceneImage {
@@ -20,6 +22,15 @@ struct SceneTarget {
 };
 
 struct SceneResources {
+    SceneImage grid_image;
+    VkSampler grid_sampler{};
+    VkDescriptorSetLayout grid_layout{};
+    VkDescriptorPool grid_pool{};
+    VkDescriptorSet grid_set{};
+    uint32_t cell_count{};
+    float origin_spacing[4]{};
+    float center[3]{};
+    float radius{};
     VkBuffer mesh{};
     VkDeviceMemory mesh_memory{};
     VkRenderPass render_pass{};
@@ -29,7 +40,8 @@ struct SceneResources {
     VkFormat depth_format{};
 };
 
-void create_scene(SceneResources& scene, VkPhysicalDevice physical_device, VkDevice device);
+void create_scene(SceneResources& scene, VkPhysicalDevice physical_device, VkDevice device,
+                  VkQueue queue, uint32_t queue_family, const geometry::UniformGrid& grid);
 void destroy_scene(SceneResources& scene, VkDevice device);
 void create_scene_target(SceneTarget& target, const SceneResources& scene,
                          VkPhysicalDevice physical_device, VkDevice device, VkExtent2D extent);
