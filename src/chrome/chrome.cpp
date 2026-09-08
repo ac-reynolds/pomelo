@@ -2,6 +2,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
@@ -45,12 +46,13 @@ chrome::ViewportState chrome::Chrome::draw_layout(TextureHandle viewport_texture
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
     ImGui::SetNextWindowPos({origin.x + left_width, origin.y});
     ImGui::SetNextWindowSize(viewport_size);
-    ImGui::Begin("Viewport", nullptr, flags);
+    const bool visible = ImGui::Begin("Viewport", nullptr, flags);
     const ImVec2 content = ImGui::GetContentRegionAvail();
-    if (viewport_texture.native)
+    if (visible && content.x > 0 && content.y > 0 && viewport_texture.native)
         ImGui::Image(static_cast<ImTextureID>(viewport_texture.native), content);
-    const ViewportState state{std::max(1, static_cast<int>(content.x)),
-                              std::max(1, static_cast<int>(content.y)),
+    const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+    const ViewportState state{visible ? std::max(0, static_cast<int>(std::ceil(content.x * scale.x))) : 0,
+                              visible ? std::max(0, static_cast<int>(std::ceil(content.y * scale.y))) : 0,
                               ImGui::IsWindowHovered(), ImGui::IsWindowFocused()};
     ImGui::End();
     empty_panel("Right", {origin.x + area.x - right_width, origin.y}, {right_width, body_height});

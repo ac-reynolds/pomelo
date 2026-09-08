@@ -21,6 +21,7 @@ struct BackendInfo {
 struct Frame {
     void* command_buffer{};
     std::uint32_t image_index{};
+    std::uint32_t frame_index{};
     bool valid{};
 };
 
@@ -38,7 +39,9 @@ public:
     [[nodiscard]] BackendInfo backend_info() const;
     void begin_imgui_frame();
     [[nodiscard]] Frame begin_frame();
-    void render_imgui(void* draw_data, void* command_buffer);
+    [[nodiscard]] std::uint64_t prepare_scene(Frame frame, int width, int height);
+    void render_scene(Frame frame, double elapsed_seconds);
+    void render_imgui(void* draw_data, Frame frame);
     void end_frame(Frame frame);
     void wait_idle();
 

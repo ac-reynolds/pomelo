@@ -1,4 +1,5 @@
 #include "graphics/vulkan_backend.hpp"
+#include "graphics/scene_renderer.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -20,15 +22,23 @@ namespace {
 
 void vk_check(VkResult result) {
     if (result != VK_SUCCESS)
-        fail("A Vulkan call failed");
+        throw std::runtime_error("Vulkan call failed: " + std::to_string(result));
 }
 
 struct Frame {
     VkCommandPool pool{};
     VkCommandBuffer command_buffer{};
     VkFence fence{};
+    VkSemaphore image_acquired{};
+    graphics::SceneTarget target;
+    VkDescriptorSet texture{};
+};
+
+struct PresentImage {
     VkImageView view{};
     VkFramebuffer framebuffer{};
+    // Presentation consumes this semaphore before this image can be reacquired.
+    VkSemaphore render_complete{};
 };
 
 struct VulkanContext {
@@ -45,8 +55,11 @@ struct VulkanContext {
     VkDescriptorPool descriptor_pool{};
     std::vector<VkImage> images;
     std::vector<Frame> frames;
-    VkSemaphore image_acquired{};
-    VkSemaphore render_complete{};
+    std::vector<PresentImage> present_images;
+    uint32_t frame_index{};
+    graphics::SceneResources scene;
+    bool imgui_initialized{};
+    bool swapchain_dirty{};
 
     void create(SDL_Window* window) {
         Uint32 extension_count = 0;
@@ -110,30 +123,36 @@ struct VulkanContext {
         vk_check(vkCreateDevice(physical_device, &device_info, nullptr, &device));
         vkGetDeviceQueue(device, queue_family, 0, &queue);
 
-        std::array<VkDescriptorPoolSize, 1> pool_sizes{{
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
+        std::array<VkDescriptorPoolSize, 2> pool_sizes{{
+            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1024},
+            {VK_DESCRIPTOR_TYPE_SAMPLER, IMGUI_IMPL_VULKAN_MINIMUM_SAMPLER_POOL_SIZE},
         }};
         VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        pool_info.maxSets = 1024;
+        pool_info.maxSets = 1024 + IMGUI_IMPL_VULKAN_MINIMUM_SAMPLER_POOL_SIZE;
         pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
         pool_info.pPoolSizes = pool_sizes.data();
         vk_check(vkCreateDescriptorPool(device, &pool_info, nullptr, &descriptor_pool));
 
-        VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-        vk_check(vkCreateSemaphore(device, &semaphore_info, nullptr, &image_acquired));
-        vk_check(vkCreateSemaphore(device, &semaphore_info, nullptr, &render_complete));
         rebuild_swapchain(window);
     }
 
     void destroy_swapchain() {
         for (auto& frame : frames) {
-            if (frame.framebuffer) vkDestroyFramebuffer(device, frame.framebuffer, nullptr);
-            if (frame.view) vkDestroyImageView(device, frame.view, nullptr);
+            if (frame.texture) ImGui_ImplVulkan_RemoveTexture(frame.texture);
+            graphics::destroy_scene_target(frame.target, device);
+            if (frame.image_acquired) vkDestroySemaphore(device, frame.image_acquired, nullptr);
             if (frame.fence) vkDestroyFence(device, frame.fence, nullptr);
             if (frame.pool) vkDestroyCommandPool(device, frame.pool, nullptr);
         }
         frames.clear();
+        frame_index = 0;
+        for (auto& image : present_images) {
+            if (image.framebuffer) vkDestroyFramebuffer(device, image.framebuffer, nullptr);
+            if (image.view) vkDestroyImageView(device, image.view, nullptr);
+            if (image.render_complete) vkDestroySemaphore(device, image.render_complete, nullptr);
+        }
+        present_images.clear();
         images.clear();
         if (render_pass) vkDestroyRenderPass(device, render_pass, nullptr);
         if (swapchain) vkDestroySwapchainKHR(device, swapchain, nullptr);
@@ -147,8 +166,13 @@ struct VulkanContext {
         if (width <= 0 || height <= 0)
             return;
 
-        vkDeviceWaitIdle(device);
+        vk_check(vkDeviceWaitIdle(device));
+        const bool restart_imgui = imgui_initialized;
         destroy_swapchain();
+        if (restart_imgui) {
+            ImGui_ImplVulkan_Shutdown();
+            imgui_initialized = false;
+        }
 
         VkSurfaceCapabilitiesKHR capabilities{};
         vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &capabilities));
@@ -219,9 +243,11 @@ struct VulkanContext {
         render_pass_info.pDependencies = &dependency;
         vk_check(vkCreateRenderPass(device, &render_pass_info, nullptr, &render_pass));
 
-        frames.resize(images.size());
-        for (size_t i = 0; i < frames.size(); ++i) {
-            auto& frame = frames[i];
+        present_images.resize(images.size());
+        for (size_t i = 0; i < present_images.size(); ++i) {
+            auto& frame = present_images[i];
+            VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+            vk_check(vkCreateSemaphore(device, &semaphore, nullptr, &frame.render_complete));
             VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view_info.image = images[i];
             view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -238,6 +264,11 @@ struct VulkanContext {
             framebuffer_info.height = extent.height;
             framebuffer_info.layers = 1;
             vk_check(vkCreateFramebuffer(device, &framebuffer_info, nullptr, &frame.framebuffer));
+        }
+        frames.resize(2);
+        for (auto& frame : frames) {
+            VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+            vk_check(vkCreateSemaphore(device, &semaphore, nullptr, &frame.image_acquired));
             VkCommandPoolCreateInfo command_pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
             command_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
             command_pool_info.queueFamilyIndex = queue_family;
@@ -251,67 +282,97 @@ struct VulkanContext {
             fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
             vk_check(vkCreateFence(device, &fence_info, nullptr, &frame.fence));
         }
+        if (restart_imgui) initialize_imgui();
+    }
+
+    void initialize_imgui() {
+        ImGui_ImplVulkan_InitInfo init{};
+        init.ApiVersion = VK_API_VERSION_1_2;
+        init.Instance = instance;
+        init.PhysicalDevice = physical_device;
+        init.Device = device;
+        init.QueueFamily = queue_family;
+        init.Queue = queue;
+        init.DescriptorPool = descriptor_pool;
+        init.MinImageCount = 2;
+        init.ImageCount = static_cast<uint32_t>(images.size());
+        init.PipelineInfoMain.RenderPass = render_pass;
+        init.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        init.CheckVkResultFn = vk_check;
+        if (!ImGui_ImplVulkan_Init(&init)) fail("Could not initialize ImGui Vulkan backend");
+        imgui_initialized = true;
     }
 
     graphics::Frame begin_frame(SDL_Window* window) {
-        if (!swapchain || extent.width == 0 || extent.height == 0)
-            return {};
-        uint32_t image_index = 0;
-        VkResult acquire = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, image_acquired, VK_NULL_HANDLE, &image_index);
-        if (acquire == VK_ERROR_OUT_OF_DATE_KHR) { rebuild_swapchain(window); return {}; }
-        if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) vk_check(acquire);
-        Frame& frame = frames[image_index];
+        if (swapchain_dirty || !swapchain) {
+            rebuild_swapchain(window);
+            swapchain_dirty = false;
+        }
+        if (!swapchain || extent.width == 0 || extent.height == 0) return {};
+        Frame& frame = frames[frame_index];
         vk_check(vkWaitForFences(device, 1, &frame.fence, VK_TRUE, UINT64_MAX));
-        vk_check(vkResetFences(device, 1, &frame.fence));
+        uint32_t image_index = 0;
+        VkResult acquire = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
+                                                frame.image_acquired, VK_NULL_HANDLE, &image_index);
+        if (acquire == VK_ERROR_OUT_OF_DATE_KHR) { swapchain_dirty = true; return {}; }
+        if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) vk_check(acquire);
+        swapchain_dirty = acquire == VK_SUBOPTIMAL_KHR;
         vk_check(vkResetCommandPool(device, frame.pool, 0));
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vk_check(vkBeginCommandBuffer(frame.command_buffer, &begin));
+        return {frame.command_buffer, image_index, frame_index, true};
+    }
+
+    void begin_presentation(graphics::Frame token) {
         VkClearValue clear{{{0.035f, 0.04f, 0.05f, 1.0f}}};
         VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = render_pass;
-        pass.framebuffer = frame.framebuffer;
+        pass.framebuffer = present_images[token.image_index].framebuffer;
         pass.renderArea.extent = extent;
         pass.clearValueCount = 1;
         pass.pClearValues = &clear;
-        vkCmdBeginRenderPass(frame.command_buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
-        return {frame.command_buffer, image_index, true};
+        vkCmdBeginRenderPass(frames[token.frame_index].command_buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
     }
 
-    void end_frame(graphics::Frame token, SDL_Window* window) {
-        Frame& frame = frames[token.image_index];
+    void end_frame(graphics::Frame token) {
+        Frame& frame = frames[token.frame_index];
+        auto& image = present_images[token.image_index];
         const uint32_t image_index = token.image_index;
         vkCmdEndRenderPass(frame.command_buffer);
         vk_check(vkEndCommandBuffer(frame.command_buffer));
         VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submit.waitSemaphoreCount = 1;
-        submit.pWaitSemaphores = &image_acquired;
+        submit.pWaitSemaphores = &frame.image_acquired;
         submit.pWaitDstStageMask = &wait_stage;
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &frame.command_buffer;
         submit.signalSemaphoreCount = 1;
-        submit.pSignalSemaphores = &render_complete;
+        submit.pSignalSemaphores = &image.render_complete;
+        vk_check(vkResetFences(device, 1, &frame.fence));
         vk_check(vkQueueSubmit(queue, 1, &submit, frame.fence));
         VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         present.waitSemaphoreCount = 1;
-        present.pWaitSemaphores = &render_complete;
+        present.pWaitSemaphores = &image.render_complete;
         present.swapchainCount = 1;
         present.pSwapchains = &swapchain;
         present.pImageIndices = &image_index;
         VkResult result = vkQueuePresentKHR(queue, &present);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) rebuild_swapchain(window);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) swapchain_dirty = true;
         else vk_check(result);
+        frame_index = (frame_index + 1) % static_cast<uint32_t>(frames.size());
     }
 
     void destroy() {
-        if (!device) return;
-        vkDeviceWaitIdle(device);
-        destroy_swapchain();
-        if (image_acquired) vkDestroySemaphore(device, image_acquired, nullptr);
-        if (render_complete) vkDestroySemaphore(device, render_complete, nullptr);
-        if (descriptor_pool) vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
-        vkDestroyDevice(device, nullptr);
+        if (device) {
+            vkDeviceWaitIdle(device);
+            destroy_swapchain();
+            graphics::destroy_scene(scene, device);
+            if (imgui_initialized) ImGui_ImplVulkan_Shutdown();
+            if (descriptor_pool) vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
+            vkDestroyDevice(device, nullptr);
+        }
         if (surface) vkDestroySurfaceKHR(instance, surface, nullptr);
         if (instance) vkDestroyInstance(instance, nullptr);
     }
@@ -326,32 +387,17 @@ struct graphics::VulkanBackend::Impl {
 
 graphics::VulkanBackend::VulkanBackend(void* native_window) : impl_(std::make_unique<Impl>()) {
     impl_->window = static_cast<SDL_Window*>(native_window);
-    impl_->vk.create(impl_->window);
-
-    const BackendInfo backend = backend_info();
-    ImGui_ImplVulkan_InitInfo init{};
-    init.ApiVersion = VK_API_VERSION_1_2;
-    init.Instance = static_cast<VkInstance>(backend.instance);
-    init.PhysicalDevice = static_cast<VkPhysicalDevice>(backend.physical_device);
-    init.Device = static_cast<VkDevice>(backend.device);
-    init.QueueFamily = backend.queue_family;
-    init.Queue = static_cast<VkQueue>(backend.queue);
-    init.DescriptorPool = static_cast<VkDescriptorPool>(backend.descriptor_pool);
-    init.MinImageCount = 2;
-    init.ImageCount = backend.image_count;
-    init.PipelineInfoMain.RenderPass = static_cast<VkRenderPass>(backend.render_pass);
-    init.PipelineInfoMain.Subpass = 0;
-    init.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    init.CheckVkResultFn = vk_check;
-    if (!ImGui_ImplVulkan_Init(&init))
-        fail("Could not initialize ImGui Vulkan backend");
+    try {
+        impl_->vk.create(impl_->window);
+        impl_->vk.initialize_imgui();
+        create_scene(impl_->vk.scene, impl_->vk.physical_device, impl_->vk.device);
+    } catch (...) {
+        impl_->vk.destroy();
+        throw;
+    }
 }
 
-graphics::VulkanBackend::~VulkanBackend() {
-    if (impl_->vk.device) vkDeviceWaitIdle(impl_->vk.device);
-    ImGui_ImplVulkan_Shutdown();
-    impl_->vk.destroy();
-}
+graphics::VulkanBackend::~VulkanBackend() { impl_->vk.destroy(); }
 graphics::BackendInfo graphics::VulkanBackend::backend_info() const {
     const auto& vk = impl_->vk;
     return {vk.instance, vk.physical_device, vk.device, vk.queue, vk.render_pass,
@@ -362,9 +408,36 @@ graphics::Frame graphics::VulkanBackend::begin_frame() {
     return impl_->vk.begin_frame(impl_->window);
 }
 void graphics::VulkanBackend::begin_imgui_frame() { ImGui_ImplVulkan_NewFrame(); }
-void graphics::VulkanBackend::render_imgui(void* draw_data, void* command_buffer) {
+void graphics::VulkanBackend::render_imgui(void* draw_data, Frame frame) {
+    impl_->vk.begin_presentation(frame);
     ImGui_ImplVulkan_RenderDrawData(static_cast<ImDrawData*>(draw_data),
-                                   static_cast<VkCommandBuffer>(command_buffer));
+                                   static_cast<VkCommandBuffer>(frame.command_buffer));
 }
-void graphics::VulkanBackend::end_frame(Frame frame) { impl_->vk.end_frame(frame, impl_->window); }
+void graphics::VulkanBackend::end_frame(Frame frame) { impl_->vk.end_frame(frame); }
 void graphics::VulkanBackend::wait_idle() { vkDeviceWaitIdle(impl_->vk.device); }
+
+std::uint64_t graphics::VulkanBackend::prepare_scene(Frame token, int width, int height) {
+    if (width <= 0 || height <= 0) return 0;
+    auto& vk = impl_->vk;
+    auto& frame = vk.frames[token.frame_index];
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(vk.physical_device, &properties);
+    const VkExtent2D extent{
+        std::min(static_cast<uint32_t>(width), std::min(properties.limits.maxImageDimension2D, properties.limits.maxFramebufferWidth)),
+        std::min(static_cast<uint32_t>(height), std::min(properties.limits.maxImageDimension2D, properties.limits.maxFramebufferHeight))};
+    if (extent.width != frame.target.extent.width || extent.height != frame.target.extent.height) {
+        if (frame.texture) ImGui_ImplVulkan_RemoveTexture(frame.texture);
+        frame.texture = VK_NULL_HANDLE;
+        destroy_scene_target(frame.target, vk.device);
+        create_scene_target(frame.target, vk.scene, vk.physical_device, vk.device, extent);
+        frame.texture = ImGui_ImplVulkan_AddTexture(frame.target.color.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    return reinterpret_cast<std::uintptr_t>(frame.texture);
+}
+
+void graphics::VulkanBackend::render_scene(Frame token, double elapsed_seconds) {
+    const auto& vk = impl_->vk;
+    const auto& frame = vk.frames[token.frame_index];
+    if (frame.target.framebuffer)
+        record_scene(vk.scene, frame.target, frame.command_buffer, elapsed_seconds);
+}

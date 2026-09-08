@@ -8,7 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
-find_package(Vulkan REQUIRED)
+find_package(Vulkan REQUIRED COMPONENTS glslc)
 
 FetchContent_Declare(
     SDL
@@ -57,11 +57,27 @@ add_library(vulkan_backend STATIC
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
 target_include_directories(vulkan_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(vulkan_backend PRIVATE imgui_core SDL3::SDL3 Vulkan::Vulkan)
+target_link_libraries(vulkan_backend PRIVATE scene_renderer imgui_core SDL3::SDL3 Vulkan::Vulkan)
 
 add_library(scene_renderer STATIC src/graphics/scene_renderer.cpp)
 target_include_directories(scene_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(scene_renderer PRIVATE vulkan_backend Vulkan::Vulkan)
+target_link_libraries(scene_renderer PRIVATE Vulkan::Vulkan)
+target_include_directories(scene_renderer PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+foreach(stage vert frag)
+    set(spirv ${CMAKE_CURRENT_BINARY_DIR}/generated/cube_${stage}.spv)
+    set(header ${CMAKE_CURRENT_BINARY_DIR}/generated/cube_${stage}.hpp)
+    add_custom_command(OUTPUT ${spirv} ${header}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated
+        COMMAND Vulkan::glslc --target-env=vulkan1.2
+                ${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.${stage} -o ${spirv}
+        COMMAND ${CMAKE_COMMAND} -DINPUT=${spirv} -DOUTPUT=${header}
+                -DSYMBOL=cube_${stage}_spirv -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_spirv.cmake
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/cube.${stage}
+                ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_spirv.cmake
+        VERBATIM
+    )
+    target_sources(scene_renderer PRIVATE ${header})
+endforeach()
 
 add_library(chrome STATIC src/chrome/chrome.cpp)
 target_include_directories(chrome PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

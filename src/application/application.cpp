@@ -1,9 +1,9 @@
 #include "application/application.hpp"
 #include "chrome/chrome.hpp"
 #include "platform/platform.hpp"
-#include "graphics/scene_renderer.hpp"
 #include "graphics/vulkan_backend.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -18,6 +18,7 @@ int application::run() {
             try {
                 graphics::VulkanBackend graphics(platform.native_window());
                 chrome::ViewportState viewport{1, 1, false, false};
+                const auto start = std::chrono::steady_clock::now();
                 bool running = true;
                 while (running) {
                     running = platform.poll_events();
@@ -26,17 +27,18 @@ int application::run() {
                         platform.delay(10);
                         continue;
                     }
-                    const graphics::ViewportImage image = graphics::render_scene(graphics, viewport.width, viewport.height);
+                    const graphics::Frame frame = graphics.begin_frame();
+                    if (!frame.valid) continue;
+                    const auto texture = graphics.prepare_scene(frame, viewport.width, viewport.height);
                     graphics.begin_imgui_frame();
                     platform.begin_imgui_frame();
                     chrome.begin_frame();
-                    viewport = chrome.draw_layout({image.texture_handle});
+                    viewport = chrome.draw_layout({texture});
                     const chrome::DrawData draw_data = chrome.finalize_frame();
-                    const graphics::Frame frame = graphics.begin_frame();
-                    if (frame.valid) {
-                        graphics.render_imgui(draw_data.native, frame.command_buffer);
-                        graphics.end_frame(frame);
-                    }
+                    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+                    if (texture) graphics.render_scene(frame, elapsed);
+                    graphics.render_imgui(draw_data.native, frame);
+                    graphics.end_frame(frame);
                 }
                 graphics.wait_idle();
             } catch (...) {
