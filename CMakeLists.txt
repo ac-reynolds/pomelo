@@ -102,7 +102,14 @@ foreach(stage vert frag)
     target_sources(scene_renderer PRIVATE ${source})
 endforeach()
 
-add_library(chrome STATIC src/chrome/chrome.cpp)
+add_library(chrome STATIC
+    src/chrome/chrome.cpp
+    src/chrome/footer.cpp
+    src/chrome/viewport.cpp
+    src/chrome/simulation.cpp
+    src/chrome/rendering.cpp
+    src/chrome/panel.cpp
+)
 target_include_directories(chrome PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(chrome PRIVATE imgui_core)
 

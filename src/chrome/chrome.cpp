@@ -1,21 +1,10 @@
 #include "chrome/chrome.hpp"
+#include "chrome/footer.hpp"
+#include "chrome/viewport.hpp"
+#include "chrome/simulation.hpp"
+#include "chrome/rendering.hpp"
 #include <imgui.h>
-
 #include <algorithm>
-#include <cmath>
-
-namespace {
-
-void empty_panel(const char* name, ImVec2 position, ImVec2 size) {
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
-    ImGui::SetNextWindowPos(position);
-    ImGui::SetNextWindowSize(size);
-    ImGui::Begin(name, nullptr, flags);
-    ImGui::End();
-}
-
-} // namespace
 
 chrome::Chrome::Chrome() {
     IMGUI_CHECKVERSION();
@@ -32,31 +21,32 @@ void chrome::Chrome::begin_frame() {
     ImGui::NewFrame();
 }
 
-chrome::ViewportState chrome::Chrome::draw_layout(TextureHandle viewport_texture) {
+chrome::ViewportState chrome::Chrome::draw_layout(TextureHandle viewport_texture, std::string_view status) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 origin = viewport->WorkPos;
     const ImVec2 area = viewport->WorkSize;
-    constexpr float footer_height = 90.0f;
-    const float body_height = std::max(1.0f, area.y - footer_height);
-    const float left_width = std::clamp(area.x * 0.20f, 180.0f, 320.0f);
-    const float right_width = std::clamp(area.x * 0.24f, 220.0f, 380.0f);
-    empty_panel("Left", origin, {left_width, body_height});
-    const ImVec2 viewport_size{std::max(1.0f, area.x - left_width - right_width), body_height};
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
-    ImGui::SetNextWindowPos({origin.x + left_width, origin.y});
-    ImGui::SetNextWindowSize(viewport_size);
-    const bool visible = ImGui::Begin("Viewport", nullptr, flags);
-    const ImVec2 content = ImGui::GetContentRegionAvail();
-    if (visible && content.x > 0 && content.y > 0 && viewport_texture.native)
-        ImGui::Image(static_cast<ImTextureID>(viewport_texture.native), content);
-    const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
-    const ViewportState state{visible ? std::max(0, static_cast<int>(std::ceil(content.x * scale.x))) : 0,
-                              visible ? std::max(0, static_cast<int>(std::ceil(content.y * scale.y))) : 0,
-                              ImGui::IsWindowHovered(), ImGui::IsWindowFocused()};
-    ImGui::End();
-    empty_panel("Right", {origin.x + area.x - right_width, origin.y}, {right_width, body_height});
-    empty_panel("Footer", {origin.x, origin.y + body_height}, {area.x, footer_height});
+    if (area.x <= 0 || area.y <= 0) return {};
+    const float footer = std::min(footer_height(), area.y);
+    const float body = std::max(0.0f, area.y - footer);
+    const float rail = ImGui::GetFrameHeight() + 4;
+    float left = simulation_.expanded ? std::clamp(area.x * 0.20f, 180.0f, 320.0f) : rail;
+    float right = rendering_.expanded ? std::clamp(area.x * 0.24f, 220.0f, 380.0f) : rail;
+    // Reserve viewport space, then shrink the expanded portions of the panels.
+    const float minimum = std::min(rail, area.x / 3);
+    const float budget = std::max(2 * minimum, area.x - std::min(160.0f, area.x / 3));
+    if (left + right > budget) {
+        const float extra = left + right - 2 * minimum;
+        const float factor = extra > 0 ? (budget - 2 * minimum) / extra : 0;
+        left = minimum + (left - minimum) * factor;
+        right = minimum + (right - minimum) * factor;
+    }
+    if (body > 0) {
+        draw_simulation({origin.x, origin.y, left, body}, simulation_);
+        draw_rendering({origin.x + area.x - right, origin.y, right, body}, rendering_);
+    }
+    const auto state = draw_viewport({origin.x + left, origin.y,
+                                     std::max(0.0f, area.x - left - right), body}, viewport_texture);
+    draw_footer({origin.x, origin.y + body, area.x, footer}, status);
     return state;
 }
 
