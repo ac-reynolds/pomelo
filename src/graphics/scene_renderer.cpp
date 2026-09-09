@@ -234,17 +234,12 @@ void upload_grid(graphics::SceneResources& scene, VkPhysicalDevice physical, VkD
     }
     cleanup();
 
-    VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    sampler.magFilter = sampler.minFilter = VK_FILTER_NEAREST;
-    sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    check(vkCreateSampler(device, &sampler, nullptr, &scene.grid_sampler));
-    VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+    VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.bindingCount = 1;
     layout.pBindings = &binding;
     check(vkCreateDescriptorSetLayout(device, &layout, nullptr, &scene.grid_layout));
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
     VkDescriptorPoolCreateInfo descriptor_pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     descriptor_pool.maxSets = descriptor_pool.poolSizeCount = 1;
     descriptor_pool.pPoolSizes = &size;
@@ -254,11 +249,11 @@ void upload_grid(graphics::SceneResources& scene, VkPhysicalDevice physical, VkD
     descriptor.descriptorSetCount = 1;
     descriptor.pSetLayouts = &scene.grid_layout;
     check(vkAllocateDescriptorSets(device, &descriptor, &scene.grid_set));
-    VkDescriptorImageInfo image_binding{scene.grid_sampler, scene.grid_image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo image_binding{VK_NULL_HANDLE, scene.grid_image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet = scene.grid_set;
     write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     write.pImageInfo = &image_binding;
     vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 }
@@ -433,7 +428,6 @@ void graphics::destroy_scene(SceneResources& scene, VkDevice device) {
     if (scene.mesh_memory) vkFreeMemory(device, scene.mesh_memory, nullptr);
     if (scene.grid_pool) vkDestroyDescriptorPool(device, scene.grid_pool, nullptr);
     if (scene.grid_layout) vkDestroyDescriptorSetLayout(device, scene.grid_layout, nullptr);
-    if (scene.grid_sampler) vkDestroySampler(device, scene.grid_sampler, nullptr);
     destroy_image(scene.grid_image, device);
     scene = {};
 }

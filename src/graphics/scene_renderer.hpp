@@ -23,7 +23,6 @@ struct SceneTarget {
 
 struct SceneResources {
     SceneImage grid_image;
-    VkSampler grid_sampler{};
     VkDescriptorSetLayout grid_layout{};
     VkDescriptorPool grid_pool{};
     VkDescriptorSet grid_set{};
