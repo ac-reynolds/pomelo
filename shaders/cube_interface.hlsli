@@ -1,8 +1,7 @@
 #ifndef POMELO_CUBE_INTERFACE_HLSLI
 #define POMELO_CUBE_INTERFACE_HLSLI
-struct CubeVaryings {
+struct VolumeVaryings {
     float4 position : SV_Position;
-    [[vk::location(0)]] nointerpolation float cell_value : TEXCOORD0;
-    [[vk::location(1)]] float2 uv : TEXCOORD1;
+    [[vk::location(0)]] float2 screen : TEXCOORD0;
 };
 #endif

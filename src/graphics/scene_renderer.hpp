@@ -26,12 +26,9 @@ struct SceneResources {
     VkDescriptorSetLayout grid_layout{};
     VkDescriptorPool grid_pool{};
     VkDescriptorSet grid_set{};
-    uint32_t cell_count{};
     float origin_spacing[4]{};
     float center[3]{};
     float radius{};
-    VkBuffer mesh{};
-    VkDeviceMemory mesh_memory{};
     VkRenderPass render_pass{};
     VkPipelineLayout layout{};
     VkPipeline pipeline{};
