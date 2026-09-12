@@ -14,11 +14,25 @@ bool chrome::begin_panel(const char* name, Bounds bounds, PanelState& state, boo
     ImGui::PopStyleVar(2);
     if (!visible) return false;
     const char* arrow = state.expanded ? (right ? ">" : "<") : (right ? "<" : ">");
-    if (ImGui::Button(arrow)) state.expanded = !state.expanded;
+    const ImVec2 header = ImGui::GetCursorScreenPos();
+    const float button_size = ImGui::GetFrameHeight();
+    const float button_x = std::max(header.x, bounds.x + bounds.width - 2 - button_size);
+    if (right) ImGui::SetCursorScreenPos({button_x, header.y});
+    if (ImGui::Button(arrow, {button_size, button_size})) state.expanded = !state.expanded;
     ImGui::SetItemTooltip("%s %s", state.expanded ? "Collapse" : "Expand", name);
     if (state.expanded) {
-        ImGui::SameLine();
-        ImGui::TextUnformatted(name);
+        if (right) {
+            // Clip the label before the fixed toggle on narrow panels.
+            ImGui::GetWindowDrawList()->PushClipRect(header,
+                {std::max(header.x, button_x - ImGui::GetStyle().ItemSpacing.x), header.y + button_size}, true);
+            ImGui::GetWindowDrawList()->AddText(
+                {header.x, header.y + ImGui::GetStyle().FramePadding.y},
+                ImGui::GetColorU32(ImGuiCol_Text), name);
+            ImGui::GetWindowDrawList()->PopClipRect();
+        } else {
+            ImGui::SameLine();
+            ImGui::TextUnformatted(name);
+        }
         ImGui::Separator();
     }
     return state.expanded;
