@@ -1,6 +1,6 @@
 #pragma once
 #include "graphics/image.hpp"
-#include "simulation/initial_conditions.hpp"
+#include "graphics/initial_conditions.hpp"
 #include <array>
 #include <cstdint>
 

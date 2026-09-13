@@ -1,6 +1,6 @@
 #include "graphics/vulkan_backend.hpp"
 #include "graphics/scene_renderer.hpp"
-#include "simulation/advection.hpp"
+#include "graphics/advection.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>

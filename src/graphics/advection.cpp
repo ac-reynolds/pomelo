@@ -1,5 +1,5 @@
-#include "simulation/advection.hpp"
-#include "simulation/shaders.hpp"
+#include "graphics/advection.hpp"
+#include "graphics/shaders.hpp"
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>

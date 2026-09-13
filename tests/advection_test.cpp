@@ -1,4 +1,4 @@
-#include "simulation/advection.hpp"
+#include "graphics/advection.hpp"
 #include "graphics/scene_renderer.hpp"
 #include <algorithm>
 #include <cmath>

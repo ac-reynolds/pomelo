@@ -1,4 +1,4 @@
-#include "geometry/uniform_grid.hpp"
+#include "graphics/uniform_grid.hpp"
 
 #include <algorithm>
 #include <cmath>

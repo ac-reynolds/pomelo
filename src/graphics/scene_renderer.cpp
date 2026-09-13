@@ -1,6 +1,6 @@
 #include "graphics/scene_renderer.hpp"
 #include "graphics/shaders.hpp"
-#include "geometry/uniform_grid.hpp"
+#include "graphics/uniform_grid.hpp"
 
 #include <array>
 #include <cmath>

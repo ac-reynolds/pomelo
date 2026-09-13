@@ -64,26 +64,20 @@ target_include_directories(imgui_core PUBLIC
     ${imgui_SOURCE_DIR}/backends
 )
 
-add_library(vulkan_backend STATIC
+# Project code is organized into application, chrome, and graphics libraries.
+# imgui_core and SDL are third-party dependencies.
+add_library(graphics STATIC
     src/graphics/vulkan_backend.cpp
+    src/graphics/scene_renderer.cpp
+    src/graphics/image.cpp
+    src/graphics/advection.cpp
+    src/graphics/initial_conditions.cpp
+    src/graphics/uniform_grid.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
-target_include_directories(vulkan_backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(vulkan_backend PRIVATE scene_renderer simulation imgui_core SDL3::SDL3 Vulkan::Vulkan)
+target_include_directories(graphics PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(graphics PUBLIC Vulkan::Vulkan PRIVATE imgui_core SDL3::SDL3)
 
-add_library(geometry STATIC src/geometry/uniform_grid.cpp)
-target_include_directories(geometry PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-add_library(scene_renderer STATIC src/graphics/scene_renderer.cpp)
-target_include_directories(scene_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-add_library(gpu_image STATIC src/graphics/image.cpp)
-target_include_directories(gpu_image PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(gpu_image PUBLIC Vulkan::Vulkan)
-target_link_libraries(scene_renderer PRIVATE geometry gpu_image Vulkan::Vulkan)
-
-add_library(simulation STATIC src/simulation/advection.cpp src/simulation/initial_conditions.cpp)
-target_include_directories(simulation PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(simulation PUBLIC geometry gpu_image)
 set(advect_spirv ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/advect_comp.spv)
 set(advect_source ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/advect_comp.cpp)
 add_custom_command(OUTPUT ${advect_spirv} ${advect_source}
@@ -92,12 +86,12 @@ add_custom_command(OUTPUT ${advect_spirv} ${advect_source}
             -HV 2021 -T cs_6_0 -E main $<IF:$<CONFIG:Debug>,-Od,-O3>
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/advect.comp.hlsl -Fo ${advect_spirv}
     COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/deployment/embed_spirv.py
-            ${advect_spirv} ${advect_source} --symbol advect_comp_spirv --header simulation/shaders.hpp
+            ${advect_spirv} ${advect_source} --symbol advect_comp_spirv --header graphics/shaders.hpp
     DEPENDS shaders/advect.comp.hlsl shaders/volume_sampling.hlsli
             "${POMELO_DXC_EXECUTABLE}" deployment/embed_spirv.py
     VERBATIM
 )
-target_sources(simulation PRIVATE ${advect_source})
+target_sources(graphics PRIVATE ${advect_source})
 foreach(stage vert frag)
     if(stage STREQUAL "vert")
         set(profile vs_6_0)
@@ -121,7 +115,7 @@ foreach(stage vert frag)
                 ${CMAKE_CURRENT_SOURCE_DIR}/deployment/embed_spirv.py
         VERBATIM
     )
-    target_sources(scene_renderer PRIVATE ${source})
+    target_sources(graphics PRIVATE ${source})
 endforeach()
 
 add_library(chrome STATIC
@@ -141,8 +135,7 @@ add_library(application STATIC
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
 )
 target_include_directories(application PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(application PUBLIC scene_renderer chrome vulkan_backend
-    PRIVATE geometry simulation imgui_core SDL3::SDL3)
+target_link_libraries(application PRIVATE graphics chrome imgui_core SDL3::SDL3)
 
 add_executable(pomelo src/application/main.cpp)
 target_link_libraries(pomelo PRIVATE application)
@@ -156,10 +149,10 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
     add_executable(uniform_grid_test tests/uniform_grid_test.cpp)
-    target_link_libraries(uniform_grid_test PRIVATE geometry)
+    target_link_libraries(uniform_grid_test PRIVATE graphics)
     add_test(NAME uniform_grid COMMAND uniform_grid_test)
     add_executable(advection_test tests/advection_test.cpp)
-    target_link_libraries(advection_test PRIVATE simulation scene_renderer)
+    target_link_libraries(advection_test PRIVATE graphics)
     add_test(NAME advection COMMAND advection_test)
     set_tests_properties(advection PROPERTIES SKIP_RETURN_CODE 77)
 endif()

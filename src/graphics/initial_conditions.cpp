@@ -1,4 +1,4 @@
-#include "simulation/initial_conditions.hpp"
+#include "graphics/initial_conditions.hpp"
 #include <cmath>
 #include <stdexcept>
 

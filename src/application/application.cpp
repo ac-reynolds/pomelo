@@ -2,7 +2,7 @@
 #include "chrome/chrome.hpp"
 #include "application/window.hpp"
 #include "graphics/vulkan_backend.hpp"
-#include "simulation/initial_conditions.hpp"
+#include "graphics/initial_conditions.hpp"
 
 #include <algorithm>
 #include <cmath>

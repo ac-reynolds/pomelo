@@ -24,7 +24,7 @@ cmake --build build -j
 The first configure needs internet access to fetch the pinned dependencies.
 CMake uses DXC to compile HLSL from `shaders/` to SPIR-V, then runs
 `deployment/embed_spirv.py` to generate C++ source files under `build/generated/Debug/`.
-Shader source or script changes regenerate those files automatically, which are compiled into `scene_renderer` and `simulation`. The
+Shader source or script changes regenerate those files automatically, which are compiled into `graphics`. The
 executable includes the compiled shaders and can run from any working directory.
 
 CMake discovers native `pomelo-dxc` or `dxc` on PATH or in the Vulkan SDK.
@@ -59,7 +59,7 @@ pause stepping, and viewport resizing preserves the simulation images.
 
 The default density shears over time. Density does not influence velocity. Buoyancy,
 pressure projection, velocity evolution, and density sources are not implemented.
-Initial conditions and speed are defined in `src/simulation/initial_conditions.*`.
+Initial conditions and speed are defined in `src/graphics/initial_conditions.*`.
 
 Run the numerical and GPU integration tests with:
 
@@ -75,12 +75,19 @@ flight with offscreen target resizing. GPU readback is restricted to tests.
 
 ## Source layout
 
-- `src/chrome`: Dear ImGui core context, panel layout, and UI interaction state
-- `src/simulation`: initial conditions, density images, and GPU advection
-- `src/graphics/image.*`: shared Vulkan image allocation and initial upload
-- `src/graphics/scene_renderer.*`: the isolated offscreen viewport producer
-- `src/graphics/vulkan_backend.*`: shared Vulkan state, swapchain presentation, and
-  the Dear ImGui Vulkan adapter
-- `src/application`: application loop, SDL window/event ownership, and the Dear ImGui SDL adapter
-- `shaders`: full-screen vertex, volume fragment, and advection compute HLSL with shared periodic sampling
-- `deployment`: build and deployment helper scripts
+Project code builds as three libraries:
+
+- `application`: application loop, frame sequencing, SDL window/event ownership,
+  and the Dear ImGui SDL adapter.
+- `chrome`: Dear ImGui context, composable panels, and UI interaction state.
+- `graphics`: Vulkan setup, resource allocation, swapchain presentation, simulation
+  and rendering command recording, and the Dear ImGui Vulkan adapter.
+
+Within `src/graphics`, `advection.*` handles simulation, `scene_renderer.*` handles
+volume rendering, `image.*` provides shared image helpers, and `vulkan_backend.*`
+owns the Vulkan object graph and submission. `initial_conditions.*` and
+`uniform_grid.*` hold field initialization and grid data utilities. These are
+focused source files within one library, not separate build targets.
+
+`imgui_core` and SDL remain third-party dependencies. `shaders/` contains HLSL
+sources and shared sampling helpers; `deployment/` contains build helpers.
