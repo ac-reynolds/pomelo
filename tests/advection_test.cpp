@@ -1,5 +1,5 @@
 #include "graphics/advection.hpp"
-#include "graphics/scene_renderer.hpp"
+#include "graphics/volume_view.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -11,7 +11,7 @@
 namespace {
 void check(VkResult r) { if (r != VK_SUCCESS) throw std::runtime_error("Test Vulkan error " + std::to_string(r)); }
 void require(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
-struct Slot { VkCommandPool pool{}; VkCommandBuffer command{}; VkFence fence{}; graphics::SceneTarget target; };
+struct Slot { VkCommandPool pool{}; VkCommandBuffer command{}; VkFence fence{}; graphics::RenderTarget target; };
 struct Context {
     VkInstance instance{};
     VkPhysicalDevice physical{};
@@ -100,7 +100,7 @@ void destroy(Context& c) {
     if (c.device) {
         vkDeviceWaitIdle(c.device);
         for (auto& slot : c.slots) {
-            graphics::destroy_scene_target(slot.target, c.device);
+            graphics::destroy_render_target(slot.target, c.device);
             if (slot.fence) vkDestroyFence(c.device, slot.fence, nullptr);
             if (slot.pool) vkDestroyCommandPool(c.device, slot.pool, nullptr);
         }
@@ -206,34 +206,47 @@ std::vector<float> reference(const simulation::InitialConditions& initial, const
     return result;
 }
 void run(Context& c, const char* name, const simulation::InitialConditions& initial, unsigned steps, float dt) {
+    simulation::SimulationFields fields;
     simulation::Advection sim;
-    graphics::SceneResources scene;
+    graphics::VolumeViewResources scene;
     auto cleanup = [&] {
         vkDeviceWaitIdle(c.device);
-        for (auto& slot : c.slots) graphics::destroy_scene_target(slot.target, c.device);
-        graphics::destroy_scene(scene, c.device);
+        for (auto& slot : c.slots) graphics::destroy_render_target(slot.target, c.device);
+        graphics::destroy_volume_view(scene, c.device);
         simulation::destroy_advection(sim, c.device);
+        simulation::destroy_fields(fields, c.device);
     };
     try {
-        simulation::create_advection(sim, c.physical, c.device, c.queue, c.family, initial);
-        graphics::create_scene(scene, c.physical, c.device, initial.density, {sim.density[0].view, sim.density[1].view});
-        for (auto& slot : c.slots) graphics::create_scene_target(slot.target, scene, c.physical, c.device, {16, 16});
+        simulation::create_fields(fields, c.physical, c.device, c.queue, c.family, initial);
+        const std::array views{simulation::density_view(fields, 0, 0), simulation::density_view(fields, 1, 0)};
+        simulation::create_advection(sim, c.physical, c.device, views, simulation::velocity_view(fields));
+        graphics::create_volume_view(scene, c.physical, c.device, views);
+        for (auto& slot : c.slots) graphics::create_render_target(slot.target, {scene.render_pass, scene.color_format, scene.depth_format}, c.physical, c.device, {16, 16});
         auto expected = initial.density.values;
         for (unsigned i = 0; i < steps; ++i) {
             auto& slot = c.slots[i % 2]; begin(c, slot);
             // Recreate only the retired target while another frame can still be in flight.
             if (i == 3) {
-                graphics::destroy_scene_target(slot.target, c.device);
-                graphics::create_scene_target(slot.target, scene, c.physical, c.device, {20, 12});
+                graphics::destroy_render_target(slot.target, c.device);
+                graphics::create_render_target(slot.target, {scene.render_pass, scene.color_format, scene.depth_format}, c.physical, c.device, {20, 12});
             }
-            uint32_t output = simulation::record_advection(sim, slot.command, dt);
-            require(output == (i + 1) % 2, "Wrong output parity");
-            graphics::record_scene(scene, slot.target, slot.command, {}, output);
-            submit(c, slot); ++sim.submitted_steps;
+            const auto step = simulation::prepare_advection(fields, dt);
+            simulation::record_advection(sim, slot.command, step);
+            require(fields.submitted_steps == i, "Recording committed simulation state prematurely");
+            const auto output = step.output;
+            require(output.image.view == fields.density[(i + 1) % 2].view, "Wrong output parity");
+            graphics::record_volume_view(scene, slot.target, slot.command, {}, output);
+            submit(c, slot); simulation::commit_step(fields, step);
+            if (i == 0) {
+                bool rejected = false;
+                try { simulation::commit_step(fields, step); }
+                catch (const std::logic_error&) { rejected = true; }
+                require(rejected, "Committed the same field version twice");
+            }
             expected = reference(initial, expected, dt);
         }
-        const VkExtent3D extent{sim.dimensions[0], sim.dimensions[1], sim.dimensions[2]};
-        auto actual = read_image(c, sim.density[sim.submitted_steps % 2], extent, 1, VK_IMAGE_LAYOUT_GENERAL);
+        const VkExtent3D extent{fields.domain.dimensions[0], fields.domain.dimensions[1], fields.domain.dimensions[2]};
+        auto actual = read_image(c, fields.density[fields.submitted_steps % 2], extent, 1, VK_IMAGE_LAYOUT_GENERAL);
         float error = 0;
         for (size_t i = 0; i < actual.size(); ++i) {
             require(std::isfinite(actual[i]) && actual[i] >= -1e-6f && actual[i] <= 1.000001f, "Density out of range");
@@ -249,11 +262,11 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
                 change = std::max(change, std::abs(actual[i] - initial.density.values[i]));
             require(change > 0.1f, "Shear did not evolve density");
             // The bottom row has zero velocity and must remain stationary.
-            for (uint32_t x = 0; x < sim.dimensions[0]; ++x)
+            for (uint32_t x = 0; x < fields.domain.dimensions[0]; ++x)
                 require(std::abs(actual[x] - initial.density.values[x]) < 1e-6f,
                         "Zero-velocity row moved");
         }
-        auto velocity = read_image(c, sim.velocity, extent, 4, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        auto velocity = read_image(c, fields.velocity, extent, 4, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         require(std::memcmp(velocity.data(), initial.velocity.data(), velocity.size()*sizeof(float)) == 0, "Velocity changed");
         if (std::strcmp(name, "integer periodic shift") == 0) {
             // Both renderer descriptors must actually select their respective images.
@@ -261,7 +274,7 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             std::array<std::vector<float>, 2> pixels;
             for (uint32_t image = 0; image < 2; ++image) {
                 auto& slot = c.slots[0]; begin(c, slot);
-                graphics::record_scene(scene, slot.target, slot.command, {}, image);
+                graphics::record_volume_view(scene, slot.target, slot.command, {}, views[image]);
                 submit(c, slot);
                 pixels[image] = read_image(c, slot.target.color,
                     {slot.target.extent.width, slot.target.extent.height, 1}, 1,

@@ -1,5 +1,5 @@
 #include "graphics/vulkan_backend.hpp"
-#include "graphics/scene_renderer.hpp"
+#include "graphics/volume_view.hpp"
 #include "graphics/advection.hpp"
 
 #include <SDL3/SDL.h>
@@ -31,7 +31,7 @@ struct Frame {
     VkCommandBuffer command_buffer{};
     VkFence fence{};
     VkSemaphore image_acquired{};
-    graphics::SceneTarget target;
+    graphics::RenderTarget target;
     VkDescriptorSet texture{};
 };
 
@@ -58,7 +58,9 @@ struct VulkanContext {
     std::vector<Frame> frames;
     std::vector<PresentImage> present_images;
     uint32_t frame_index{};
-    graphics::SceneResources scene;
+    graphics::VolumeViewResources volume_view;
+    simulation::SimulationFields fields;
+    simulation::AdvectionStep pending_step;
     simulation::Advection simulation;
     bool step_recorded{};
     bool imgui_initialized{};
@@ -144,7 +146,7 @@ struct VulkanContext {
     void destroy_swapchain() {
         for (auto& frame : frames) {
             if (frame.texture) ImGui_ImplVulkan_RemoveTexture(frame.texture);
-            graphics::destroy_scene_target(frame.target, device);
+            graphics::destroy_render_target(frame.target, device);
             if (frame.image_acquired) vkDestroySemaphore(device, frame.image_acquired, nullptr);
             if (frame.fence) vkDestroyFence(device, frame.fence, nullptr);
             if (frame.pool) vkDestroyCommandPool(device, frame.pool, nullptr);
@@ -356,7 +358,7 @@ struct VulkanContext {
         submit.pSignalSemaphores = &image.render_complete;
         vk_check(vkResetFences(device, 1, &frame.fence));
         vk_check(vkQueueSubmit(queue, 1, &submit, frame.fence));
-        if (step_recorded) ++simulation.submitted_steps;
+        if (step_recorded) simulation::commit_step(fields, pending_step);
         step_recorded = false;
         VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         present.waitSemaphoreCount = 1;
@@ -374,8 +376,9 @@ struct VulkanContext {
         if (device) {
             vkDeviceWaitIdle(device);
             destroy_swapchain();
-            graphics::destroy_scene(scene, device);
+            graphics::destroy_volume_view(volume_view, device);
             simulation::destroy_advection(simulation, device);
+            simulation::destroy_fields(fields, device);
             if (imgui_initialized) ImGui_ImplVulkan_Shutdown();
             if (descriptor_pool) vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
             vkDestroyDevice(device, nullptr);
@@ -398,9 +401,10 @@ graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::In
         impl_->vk.create(impl_->window);
         impl_->vk.initialize_imgui();
         auto& vk = impl_->vk;
-        simulation::create_advection(vk.simulation, vk.physical_device, vk.device, vk.queue, vk.queue_family, initial);
-        create_scene(vk.scene, vk.physical_device, vk.device, initial.density,
-                     {vk.simulation.density[0].view, vk.simulation.density[1].view});
+        simulation::create_fields(vk.fields, vk.physical_device, vk.device, vk.queue, vk.queue_family, initial);
+        const std::array fields{simulation::density_view(vk.fields, 0, 0), simulation::density_view(vk.fields, 1, 0)};
+        simulation::create_advection(vk.simulation, vk.physical_device, vk.device, fields, simulation::velocity_view(vk.fields));
+        create_volume_view(vk.volume_view, vk.physical_device, vk.device, fields);
     } catch (...) {
         impl_->vk.destroy();
         throw;
@@ -426,7 +430,7 @@ void graphics::VulkanBackend::render_imgui(void* draw_data, Frame frame) {
 void graphics::VulkanBackend::end_frame(Frame frame) { impl_->vk.end_frame(frame); }
 void graphics::VulkanBackend::wait_idle() { vkDeviceWaitIdle(impl_->vk.device); }
 
-std::uint64_t graphics::VulkanBackend::prepare_scene(Frame token, int width, int height) {
+std::uint64_t graphics::VulkanBackend::prepare_viewport(Frame token, int width, int height) {
     if (width <= 0 || height <= 0) return 0;
     auto& vk = impl_->vk;
     auto& frame = vk.frames[token.frame_index];
@@ -438,20 +442,25 @@ std::uint64_t graphics::VulkanBackend::prepare_scene(Frame token, int width, int
     if (extent.width != frame.target.extent.width || extent.height != frame.target.extent.height) {
         if (frame.texture) ImGui_ImplVulkan_RemoveTexture(frame.texture);
         frame.texture = VK_NULL_HANDLE;
-        destroy_scene_target(frame.target, vk.device);
-        create_scene_target(frame.target, vk.scene, vk.physical_device, vk.device, extent);
+        destroy_render_target(frame.target, vk.device);
+        create_render_target(frame.target, {vk.volume_view.render_pass, vk.volume_view.color_format, vk.volume_view.depth_format}, vk.physical_device, vk.device, extent);
         frame.texture = ImGui_ImplVulkan_AddTexture(frame.target.color.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
     return reinterpret_cast<std::uintptr_t>(frame.texture);
 }
 
-void graphics::VulkanBackend::render_scene(Frame token, const OrbitCamera& camera) {
+graphics::FieldView graphics::VulkanBackend::step_simulation(Frame token) {
     auto& vk = impl_->vk;
-    const auto& frame = vk.frames[token.frame_index];
     if (vk.step_recorded) throw std::logic_error("Simulation already recorded for this frame");
-    if (frame.target.framebuffer) {
-        const auto destination = simulation::record_advection(vk.simulation, frame.command_buffer);
-        record_scene(vk.scene, frame.target, frame.command_buffer, camera, destination);
-        vk.step_recorded = true;
-    }
+    vk.pending_step = simulation::prepare_advection(vk.fields);
+    simulation::record_advection(vk.simulation, vk.frames[token.frame_index].command_buffer, vk.pending_step);
+    vk.step_recorded = true;
+    return vk.pending_step.output;
+}
+
+void graphics::VulkanBackend::render_volume(Frame token, const FieldView& field, const OrbitCamera& camera) {
+    const auto& vk = impl_->vk;
+    const auto& frame = vk.frames[token.frame_index];
+    if (frame.target.framebuffer)
+        record_volume_view(vk.volume_view, frame.target, frame.command_buffer, camera, field);
 }

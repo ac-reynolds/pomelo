@@ -1,6 +1,5 @@
-#include "graphics/scene_renderer.hpp"
+#include "graphics/volume_view.hpp"
 #include "graphics/shaders.hpp"
-#include "graphics/uniform_grid.hpp"
 
 #include <array>
 #include <cmath>
@@ -14,7 +13,7 @@ namespace {
 
 void check(VkResult result) {
     if (result != VK_SUCCESS)
-        throw std::runtime_error("Scene Vulkan call failed: " + std::to_string(result));
+        throw std::runtime_error("Volume view Vulkan call failed: " + std::to_string(result));
 }
 
 VkFormat supported_format(VkPhysicalDevice physical, std::initializer_list<VkFormat> formats,
@@ -37,40 +36,34 @@ struct Transform {
 };
 static_assert(offsetof(Transform, origin_spacing) == 64 && sizeof(Transform) == 80);
 
-void bind_grid(graphics::SceneResources& scene, VkDevice device,
-               const geometry::UniformGrid& grid, const std::array<VkImageView, 2>& density) {
-    double radius_squared = 0;
-    for (size_t axis = 0; axis < 3; ++axis) {
-        scene.origin_spacing[axis] = grid.origin[axis];
-        const double half = 0.5 * grid.spacing * grid.dimensions[axis];
-        scene.center[axis] = static_cast<float>(grid.origin[axis] + half);
-        radius_squared += half * half;
-    }
-    scene.origin_spacing[3] = grid.spacing;
-    scene.radius = static_cast<float>(std::sqrt(radius_squared));
-    if (!std::isfinite(scene.radius) || scene.radius <= 0)
-        throw std::invalid_argument("Grid bounds cannot be represented for rendering");
-
+void bind_grid(graphics::VolumeViewResources& view, VkDevice device,
+               std::span<const graphics::FieldView> fields) {
+    if (fields.empty()) throw std::invalid_argument("Volume view needs at least one field");
+    view.fields.assign(fields.begin(), fields.end());
+    view.grid_sets.resize(fields.size());
+    for (const auto& field : fields)
+        if (field.format != VK_FORMAT_R32_SFLOAT)
+            throw std::invalid_argument("Volume view currently supports scalar R32 fields");
     VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.bindingCount = 1;
     layout.pBindings = &binding;
-    check(vkCreateDescriptorSetLayout(device, &layout, nullptr, &scene.grid_layout));
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2};
+    check(vkCreateDescriptorSetLayout(device, &layout, nullptr, &view.grid_layout));
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, static_cast<uint32_t>(fields.size())};
     VkDescriptorPoolCreateInfo descriptor_pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    descriptor_pool.maxSets = 2;
+    descriptor_pool.maxSets = static_cast<uint32_t>(fields.size());
     descriptor_pool.poolSizeCount = 1;
     descriptor_pool.pPoolSizes = &size;
-    check(vkCreateDescriptorPool(device, &descriptor_pool, nullptr, &scene.grid_pool));
+    check(vkCreateDescriptorPool(device, &descriptor_pool, nullptr, &view.grid_pool));
     VkDescriptorSetAllocateInfo descriptor{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    descriptor.descriptorPool = scene.grid_pool;
+    descriptor.descriptorPool = view.grid_pool;
     descriptor.descriptorSetCount = 1;
-    descriptor.pSetLayouts = &scene.grid_layout;
-    for (size_t i = 0; i < density.size(); ++i) {
-        check(vkAllocateDescriptorSets(device, &descriptor, &scene.grid_sets[i]));
-        VkDescriptorImageInfo image_binding{VK_NULL_HANDLE, density[i], VK_IMAGE_LAYOUT_GENERAL};
+    descriptor.pSetLayouts = &view.grid_layout;
+    for (size_t i = 0; i < fields.size(); ++i) {
+        check(vkAllocateDescriptorSets(device, &descriptor, &view.grid_sets[i]));
+        VkDescriptorImageInfo image_binding{VK_NULL_HANDLE, fields[i].image.view, fields[i].layout};
         VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet = scene.grid_sets[i];
+        write.dstSet = view.grid_sets[i];
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
         write.pImageInfo = &image_binding;
@@ -80,19 +73,19 @@ void bind_grid(graphics::SceneResources& scene, VkDevice device,
 
 } // namespace
 
-void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, VkDevice device,
-                            const geometry::UniformGrid& grid, const std::array<VkImageView, 2>& density) {
+void graphics::create_volume_view(VolumeViewResources& view, VkPhysicalDevice physical, VkDevice device,
+                            std::span<const graphics::FieldView> fields) {
     VkShaderModule vertex_shader{}, fragment_shader{};
     try {
-        bind_grid(scene, device, grid, density);
-        scene.color_format = supported_format(physical, {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM},
+        bind_grid(view, device, fields);
+        view.color_format = supported_format(physical, {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM},
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
             VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
-        scene.depth_format = supported_format(physical, {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM},
+        view.depth_format = supported_format(physical, {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM},
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
 
         std::array<VkAttachmentDescription, 2> attachments{};
-        attachments[0].format = scene.color_format;
+        attachments[0].format = view.color_format;
         attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
         attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -101,7 +94,7 @@ void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, Vk
         attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         attachments[1] = attachments[0];
-        attachments[1].format = scene.depth_format;
+        attachments[1].format = view.depth_format;
         attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         VkAttachmentReference color{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -137,15 +130,15 @@ void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, Vk
         pass.pSubpasses = &subpass;
         pass.dependencyCount = static_cast<uint32_t>(dependencies.size());
         pass.pDependencies = dependencies.data();
-        check(vkCreateRenderPass(device, &pass, nullptr, &scene.render_pass));
+        check(vkCreateRenderPass(device, &pass, nullptr, &view.render_pass));
 
         VkPushConstantRange constants{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Transform)};
         VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         layout.setLayoutCount = 1;
-        layout.pSetLayouts = &scene.grid_layout;
+        layout.pSetLayouts = &view.grid_layout;
         layout.pushConstantRangeCount = 1;
         layout.pPushConstantRanges = &constants;
-        check(vkCreatePipelineLayout(device, &layout, nullptr, &scene.layout));
+        check(vkCreatePipelineLayout(device, &layout, nullptr, &view.layout));
         VkShaderModuleCreateInfo module{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         module.codeSize = cube_vert_spirv_size;
         module.pCode = cube_vert_spirv;
@@ -196,97 +189,86 @@ void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, Vk
         pipeline.pDepthStencilState = &depth_state;
         pipeline.pColorBlendState = &blend;
         pipeline.pDynamicState = &dynamic;
-        pipeline.layout = scene.layout;
-        pipeline.renderPass = scene.render_pass;
-        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &scene.pipeline));
+        pipeline.layout = view.layout;
+        pipeline.renderPass = view.render_pass;
+        check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &view.pipeline));
     } catch (...) {
         if (fragment_shader) vkDestroyShaderModule(device, fragment_shader, nullptr);
         if (vertex_shader) vkDestroyShaderModule(device, vertex_shader, nullptr);
-        destroy_scene(scene, device);
+        destroy_volume_view(view, device);
         throw;
     }
     vkDestroyShaderModule(device, fragment_shader, nullptr);
     vkDestroyShaderModule(device, vertex_shader, nullptr);
 }
 
-void graphics::destroy_scene(SceneResources& scene, VkDevice device) {
-    if (scene.pipeline) vkDestroyPipeline(device, scene.pipeline, nullptr);
-    if (scene.layout) vkDestroyPipelineLayout(device, scene.layout, nullptr);
-    if (scene.render_pass) vkDestroyRenderPass(device, scene.render_pass, nullptr);
-    if (scene.grid_pool) vkDestroyDescriptorPool(device, scene.grid_pool, nullptr);
-    if (scene.grid_layout) vkDestroyDescriptorSetLayout(device, scene.grid_layout, nullptr);
-    scene = {};
+void graphics::destroy_volume_view(VolumeViewResources& view, VkDevice device) {
+    if (view.pipeline) vkDestroyPipeline(device, view.pipeline, nullptr);
+    if (view.layout) vkDestroyPipelineLayout(device, view.layout, nullptr);
+    if (view.render_pass) vkDestroyRenderPass(device, view.render_pass, nullptr);
+    if (view.grid_pool) vkDestroyDescriptorPool(device, view.grid_pool, nullptr);
+    if (view.grid_layout) vkDestroyDescriptorSetLayout(device, view.grid_layout, nullptr);
+    view = {};
 }
 
-void graphics::create_scene_target(SceneTarget& target, const SceneResources& scene,
-                                  VkPhysicalDevice physical, VkDevice device, VkExtent2D extent) {
-    try {
-        target.extent = extent;
-        gpu::create_image(target.color, physical, device, {extent.width, extent.height, 1}, VK_IMAGE_TYPE_2D, scene.color_format,
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-            VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-        gpu::create_image(target.depth, physical, device, {extent.width, extent.height, 1}, VK_IMAGE_TYPE_2D, scene.depth_format,
-            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
-        const VkImageView views[] = {target.color.view, target.depth.view};
-        VkFramebufferCreateInfo framebuffer{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-        framebuffer.renderPass = scene.render_pass;
-        framebuffer.attachmentCount = 2;
-        framebuffer.pAttachments = views;
-        framebuffer.width = extent.width;
-        framebuffer.height = extent.height;
-        framebuffer.layers = 1;
-        check(vkCreateFramebuffer(device, &framebuffer, nullptr, &target.framebuffer));
-    } catch (...) {
-        destroy_scene_target(target, device);
-        throw;
+void graphics::record_volume_view(const VolumeViewResources& view, const RenderTarget& target,
+                           VkCommandBuffer command_buffer, const OrbitCamera& camera, const FieldView& field) {
+    size_t binding = 0;
+    while (binding < view.fields.size() && view.fields[binding].image.view != field.image.view) ++binding;
+    if (binding == view.fields.size() || !same_field_binding(view.fields[binding], field))
+        throw std::invalid_argument("Field has no compatible volume binding");
+    const auto& grid = field.domain;
+    std::array<float, 4> origin_spacing{};
+    std::array<float, 3> center{};
+    float radius{};
+    double radius_squared = 0;
+    for (size_t axis = 0; axis < 3; ++axis) {
+        origin_spacing[axis] = grid.origin[axis];
+        const double half = 0.5 * grid.spacing * grid.dimensions[axis];
+        center[axis] = static_cast<float>(grid.origin[axis] + half);
+        radius_squared += half * half;
     }
-}
+    origin_spacing[3] = grid.spacing;
+    radius = static_cast<float>(std::sqrt(radius_squared));
+    if (!std::isfinite(radius) || radius <= 0)
+        throw std::invalid_argument("Grid bounds cannot be represented for rendering");
 
-void graphics::destroy_scene_target(SceneTarget& target, VkDevice device) {
-    if (target.framebuffer) vkDestroyFramebuffer(device, target.framebuffer, nullptr);
-    gpu::destroy_image(target.depth, device);
-    gpu::destroy_image(target.color, device);
-    target = {};
-}
-
-void graphics::record_scene(const SceneResources& scene, const SceneTarget& target,
-                           VkCommandBuffer command_buffer, const OrbitCamera& camera, uint32_t density_index) {
     const float angle = camera.yaw;
     const float c = std::cos(angle), s = std::sin(angle);
     const float tilt = camera.pitch, ct = std::cos(tilt), st = std::sin(tilt);
     const float aspect = static_cast<float>(target.extent.width) / target.extent.height;
     const float tangent = std::tan(0.785398163f * 0.5f);
     const float half_fov = std::atan(tangent * std::fmin(aspect, 1.0f));
-    const float distance = 1.1f * scene.radius / std::sin(half_fov);
+    const float distance = 1.1f * radius / std::sin(half_fov);
     // Orbit basis, with rays expressed in grid space.
     const std::array<float, 3> right{c, 0, s};
     const std::array<float, 3> up{s * st, ct, -c * st};
     const std::array<float, 3> back{-s * ct, st, c * ct};
     const Transform transform{
-        {scene.center[0] + distance * back[0], scene.center[1] + distance * back[1],
-         scene.center[2] + distance * back[2], 0},
+        {center[0] + distance * back[0], center[1] + distance * back[1],
+         center[2] + distance * back[2], 0},
         {right[0] * tangent * aspect, right[1] * tangent * aspect, right[2] * tangent * aspect, 0},
         {up[0] * tangent, up[1] * tangent, up[2] * tangent, 0},
         {-back[0], -back[1], -back[2], 0},
-        {scene.origin_spacing[0], scene.origin_spacing[1], scene.origin_spacing[2], scene.origin_spacing[3]}};
+        {origin_spacing[0], origin_spacing[1], origin_spacing[2], origin_spacing[3]}};
     std::array<VkClearValue, 2> clear{};
     clear[0].color = {{0.055f, 0.065f, 0.085f, 1.0f}};
     clear[1].depthStencil = {1.0f, 0};
     VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    pass.renderPass = scene.render_pass;
+    pass.renderPass = view.render_pass;
     pass.framebuffer = target.framebuffer;
     pass.renderArea.extent = target.extent;
     pass.clearValueCount = static_cast<uint32_t>(clear.size());
     pass.pClearValues = clear.data();
     vkCmdBeginRenderPass(command_buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene.pipeline);
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, view.pipeline);
     VkViewport viewport{0, 0, static_cast<float>(target.extent.width), static_cast<float>(target.extent.height), 0, 1};
     VkRect2D scissor{{0, 0}, target.extent};
     vkCmdSetViewport(command_buffer, 0, 1, &viewport);
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
-    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene.layout,
-                            0, 1, &scene.grid_sets.at(density_index), 0, nullptr);
-    vkCmdPushConstants(command_buffer, scene.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(transform), &transform);
+    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, view.layout,
+                            0, 1, &view.grid_sets.at(binding), 0, nullptr);
+    vkCmdPushConstants(command_buffer, view.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(transform), &transform);
     vkCmdDraw(command_buffer, 3, 1, 0, 0);
     vkCmdEndRenderPass(command_buffer);
 }

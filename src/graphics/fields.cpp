@@ -1,0 +1,38 @@
+#include "graphics/fields.hpp"
+#include <stdexcept>
+
+void simulation::create_fields(SimulationFields& fields, VkPhysicalDevice physical, VkDevice device,
+    VkQueue queue, uint32_t queue_family, const InitialConditions& initial) {
+    validate_initial_conditions(initial);
+    fields.domain = {initial.density.dimensions, initial.density.origin, initial.density.spacing};
+    try {
+        const VkExtent3D extent{fields.domain.dimensions[0], fields.domain.dimensions[1], fields.domain.dimensions[2]};
+        for (auto& density : fields.density) {
+            gpu::create_image(density, physical, device, extent, VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            gpu::upload_image(density, physical, device, queue, queue_family, extent,
+                initial.density.values.data(), initial.density.values.size() * sizeof(float), VK_IMAGE_LAYOUT_GENERAL);
+        }
+        gpu::create_image(fields.velocity, physical, device, extent, VK_IMAGE_TYPE_3D, VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+        gpu::upload_image(fields.velocity, physical, device, queue, queue_family, extent,
+            initial.velocity.data(), initial.velocity.size() * sizeof(initial.velocity[0]),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    } catch (...) { destroy_fields(fields, device); throw; }
+}
+void simulation::destroy_fields(SimulationFields& fields, VkDevice device) {
+    for (auto& image : fields.density) gpu::destroy_image(image, device);
+    gpu::destroy_image(fields.velocity, device);
+    fields = {};
+}
+graphics::FieldView simulation::density_view(const SimulationFields& fields, uint32_t index, uint64_t version) {
+    return {fields.density.at(index), VK_FORMAT_R32_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, fields.domain, version};
+}
+graphics::FieldView simulation::current_density(const SimulationFields& fields) {
+    return density_view(fields, fields.submitted_steps % 2, fields.submitted_steps);
+}
+graphics::FieldView simulation::velocity_view(const SimulationFields& fields) {
+    return {fields.velocity, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, fields.domain, 0};
+}

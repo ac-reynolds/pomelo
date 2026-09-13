@@ -83,8 +83,11 @@ Project code builds as three libraries:
 - `graphics`: Vulkan setup, resource allocation, swapchain presentation, simulation
   and rendering command recording, and the Dear ImGui Vulkan adapter.
 
-Within `src/graphics`, `advection.*` handles simulation, `scene_renderer.*` handles
-volume rendering, `image.*` provides shared image helpers, and `vulkan_backend.*`
+Within `src/graphics`, `fields.*` owns simulation images and their current versions,
+`advection.*` records operations against borrowed fields, `volume_view.*`
+visualizes a selected scalar field, and `render_target.*` owns offscreen output
+attachments. `field_view.hpp` describes borrowed image versions and their domain.
+`image.*` provides shared image helpers, and `vulkan_backend.*`
 owns the Vulkan object graph and submission. `initial_conditions.*` and
 `uniform_grid.*` hold field initialization and grid data utilities. These are
 focused source files within one library, not separate build targets.

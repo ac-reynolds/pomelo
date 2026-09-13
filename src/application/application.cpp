@@ -33,7 +33,7 @@ int application::run() {
                     }
                     const graphics::Frame frame = graphics.begin_frame();
                     if (!frame.valid) continue;
-                    const auto texture = graphics.prepare_scene(frame, viewport.width, viewport.height);
+                    const auto texture = graphics.prepare_viewport(frame, viewport.width, viewport.height);
                     graphics.begin_imgui_frame();
                     window.begin_imgui_frame();
                     chrome.begin_frame();
@@ -43,7 +43,10 @@ int application::run() {
                     camera.yaw = std::remainder(camera.yaw + viewport.orbit_dx * sensitivity,
                                                 2 * std::numbers::pi_v<float>);
                     camera.pitch = std::clamp(camera.pitch + viewport.orbit_dy * sensitivity, -1.5f, 1.5f);
-                    if (texture) graphics.render_scene(frame, camera);
+                    if (texture) {
+                        const auto density = graphics.step_simulation(frame);
+                        graphics.render_volume(frame, density, camera);
+                    }
                     graphics.render_imgui(draw_data.native, frame);
                     graphics.end_frame(frame);
                 }

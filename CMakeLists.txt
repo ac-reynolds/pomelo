@@ -68,7 +68,9 @@ target_include_directories(imgui_core PUBLIC
 # imgui_core and SDL are third-party dependencies.
 add_library(graphics STATIC
     src/graphics/vulkan_backend.cpp
-    src/graphics/scene_renderer.cpp
+    src/graphics/volume_view.cpp
+    src/graphics/render_target.cpp
+    src/graphics/fields.cpp
     src/graphics/image.cpp
     src/graphics/advection.cpp
     src/graphics/initial_conditions.cpp

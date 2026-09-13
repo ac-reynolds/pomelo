@@ -1,27 +1,27 @@
 #pragma once
-#include "graphics/image.hpp"
-#include "graphics/initial_conditions.hpp"
-#include <array>
-#include <cstdint>
+#include "graphics/fields.hpp"
 
 namespace simulation {
 inline constexpr float timestep = 1.0f / 60;
 struct Advection {
-    std::array<gpu::Image, 2> density;
-    gpu::Image velocity;
-    std::array<uint32_t, 3> dimensions{};
-    float spacing{};
+    std::array<graphics::FieldView, 2> inputs;
+    graphics::FieldView velocity;
     VkDescriptorSetLayout descriptor_layout{};
     VkDescriptorPool pool{};
     std::array<VkDescriptorSet, 2> sets{};
     VkPipelineLayout layout{};
     VkPipeline pipeline{};
-    uint64_t submitted_steps{};
 };
-void create_advection(Advection&, VkPhysicalDevice, VkDevice, VkQueue, uint32_t queue_family,
-                      const InitialConditions&);
-// Caller waits for GPU completion before destruction.
+struct AdvectionStep {
+    graphics::FieldView input, velocity, output;
+    float dt{};
+};
+void create_advection(Advection&, VkPhysicalDevice, VkDevice,
+    const std::array<graphics::FieldView, 2>& density, const graphics::FieldView& velocity);
+// Destroys operation resources only; fields outlive their borrowers.
 void destroy_advection(Advection&, VkDevice);
-// Records one step and returns the new image index; does not advance submitted_steps.
-uint32_t record_advection(const Advection&, VkCommandBuffer, float dt = timestep);
+AdvectionStep prepare_advection(const SimulationFields&, float dt = timestep);
+void record_advection(const Advection&, VkCommandBuffer, const AdvectionStep&);
+// Call only after successful queue submission.
+void commit_step(SimulationFields&, const AdvectionStep&);
 }

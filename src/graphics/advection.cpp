@@ -14,34 +14,31 @@ static_assert(sizeof(Step) == 16 && offsetof(Step, dt_over_spacing) == 12);
 }
 
 void simulation::create_advection(Advection& sim, VkPhysicalDevice physical, VkDevice device,
-    VkQueue queue, uint32_t queue_family, const InitialConditions& initial) {
-    validate_initial_conditions(initial);
+    const std::array<graphics::FieldView, 2>& density, const graphics::FieldView& velocity) {
+    const auto& domain = density[0].domain;
+    if (density[0].image.image == density[1].image.image || !std::isfinite(domain.spacing) || domain.spacing <= 0)
+        throw std::invalid_argument("Advection requires distinct images and positive spacing");
+    for (const auto& field : density)
+        if (!field.image.image || !field.image.view || field.format != VK_FORMAT_R32_SFLOAT ||
+            field.layout != VK_IMAGE_LAYOUT_GENERAL || field.domain.dimensions != domain.dimensions ||
+            field.domain.origin != domain.origin || field.domain.spacing != domain.spacing)
+            throw std::invalid_argument("Incompatible advection density field");
+    if (!velocity.image.image || !velocity.image.view || velocity.format != VK_FORMAT_R32G32B32A32_SFLOAT ||
+        velocity.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL || velocity.domain.dimensions != domain.dimensions ||
+        velocity.domain.origin != domain.origin || velocity.domain.spacing != domain.spacing)
+        throw std::invalid_argument("Incompatible advection velocity field");
     VkShaderModule shader{};
     try {
-        sim.dimensions = initial.density.dimensions;
-        sim.spacing = initial.density.spacing;
+        sim.inputs = density;
+        sim.velocity = velocity;
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(physical, &properties);
         if (properties.limits.maxComputeWorkGroupInvocations < 64)
             throw std::runtime_error("Advection requires 64 compute invocations per workgroup");
         for (size_t axis = 0; axis < 3; ++axis)
-            if (properties.limits.maxComputeWorkGroupSize[axis] < 4 ||
-                (uint64_t(sim.dimensions[axis]) + 3) / 4 > properties.limits.maxComputeWorkGroupCount[axis])
+            if (!domain.dimensions[axis] || properties.limits.maxComputeWorkGroupSize[axis] < 4 ||
+                (uint64_t(density[0].domain.dimensions[axis]) + 3) / 4 > properties.limits.maxComputeWorkGroupCount[axis])
                 throw std::invalid_argument("Advection dispatch exceeds device limits");
-        const VkExtent3D extent{sim.dimensions[0], sim.dimensions[1], sim.dimensions[2]};
-        for (auto& density : sim.density) {
-            gpu::create_image(density, physical, device, extent, VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT,
-                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-            gpu::upload_image(density, physical, device, queue, queue_family, extent,
-                initial.density.values.data(), initial.density.values.size() * sizeof(float), VK_IMAGE_LAYOUT_GENERAL);
-        }
-        gpu::create_image(sim.velocity, physical, device, extent, VK_IMAGE_TYPE_3D, VK_FORMAT_R32G32B32A32_SFLOAT,
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT);
-        gpu::upload_image(sim.velocity, physical, device, queue, queue_family, extent,
-            initial.velocity.data(), initial.velocity.size() * sizeof(initial.velocity[0]),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         const VkDescriptorSetLayoutBinding bindings[] = {
             {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -63,9 +60,9 @@ void simulation::create_advection(Advection& sim, VkPhysicalDevice physical, VkD
             allocate.pSetLayouts = &sim.descriptor_layout;
             check(vkAllocateDescriptorSets(device, &allocate, &sim.sets[i]));
             const VkDescriptorImageInfo images[] = {
-                {VK_NULL_HANDLE, sim.density[i].view, VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, sim.velocity.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                {VK_NULL_HANDLE, sim.density[1-i].view, VK_IMAGE_LAYOUT_GENERAL}};
+                {VK_NULL_HANDLE, sim.inputs[i].image.view, VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, sim.velocity.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                {VK_NULL_HANDLE, sim.inputs[1-i].image.view, VK_IMAGE_LAYOUT_GENERAL}};
             for (uint32_t binding = 0; binding < 3; ++binding) {
                 VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                 write.dstSet = sim.sets[i];
@@ -107,21 +104,26 @@ void simulation::destroy_advection(Advection& sim, VkDevice device) {
     if (sim.layout) vkDestroyPipelineLayout(device, sim.layout, nullptr);
     if (sim.pool) vkDestroyDescriptorPool(device, sim.pool, nullptr);
     if (sim.descriptor_layout) vkDestroyDescriptorSetLayout(device, sim.descriptor_layout, nullptr);
-    for (auto& density : sim.density) gpu::destroy_image(density, device);
-    gpu::destroy_image(sim.velocity, device);
     sim = {};
 }
 
-uint32_t simulation::record_advection(const Advection& sim, VkCommandBuffer command, float dt) {
-    const float ratio = dt / sim.spacing;
+void simulation::record_advection(const Advection& sim, VkCommandBuffer command, const AdvectionStep& operation) {
+    const float ratio = operation.dt / operation.input.domain.spacing;
+    const float dt = operation.dt;
     if (!std::isfinite(ratio) || dt < 0) throw std::invalid_argument("Invalid advection timestep");
-    const uint32_t source = sim.submitted_steps % 2, destination = 1 - source;
+    const uint32_t source = operation.input.image.view == sim.inputs[0].image.view ? 0 : 1;
+    const uint32_t destination = 1 - source;
+    if (!graphics::same_field_binding(operation.input, sim.inputs[source]) ||
+        !graphics::same_field_binding(operation.output, sim.inputs[destination]) ||
+        !graphics::same_field_binding(operation.velocity, sim.velocity))
+        throw std::invalid_argument("Advection fields do not match immutable bindings");
+    const auto dimensions = operation.input.domain.dimensions;
     std::array<VkImageMemoryBarrier, 2> barriers{};
     for (uint32_t i = 0; i < 2; ++i) {
         auto& barrier = barriers[i];
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = sim.density[i].image;
+        barrier.image = sim.inputs[i].image.image;
         barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         barrier.oldLayout = barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
         barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -133,14 +135,27 @@ uint32_t simulation::record_advection(const Advection& sim, VkCommandBuffer comm
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, barriers.data());
     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, sim.pipeline);
     vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, sim.layout, 0, 1, &sim.sets[source], 0, nullptr);
-    const Step step{sim.dimensions, ratio};
+    const Step step{dimensions, ratio};
     vkCmdPushConstants(command, sim.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(step), &step);
-    vkCmdDispatch(command, (sim.dimensions[0] + 3) / 4, (sim.dimensions[1] + 3) / 4, (sim.dimensions[2] + 3) / 4);
+    vkCmdDispatch(command, (dimensions[0] + 3) / 4, (dimensions[1] + 3) / 4, (dimensions[2] + 3) / 4);
     auto& ready = barriers[destination];
     ready.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     ready.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &ready);
-    return destination;
+
+}
+
+simulation::AdvectionStep simulation::prepare_advection(const SimulationFields& fields, float dt) {
+    return {current_density(fields), velocity_view(fields),
+            density_view(fields, 1 - fields.submitted_steps % 2, fields.submitted_steps + 1), dt};
+}
+void simulation::commit_step(SimulationFields& fields, const AdvectionStep& step) {
+    if (step.input.version != fields.submitted_steps ||
+        step.input.image.view != current_density(fields).image.view ||
+        step.output.image.view != fields.density[1 - fields.submitted_steps % 2].view ||
+        step.output.version != fields.submitted_steps + 1)
+        throw std::logic_error("Cannot commit stale advection step");
+    ++fields.submitted_steps;
 }

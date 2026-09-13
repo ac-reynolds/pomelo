@@ -10,7 +10,7 @@ uint32_t memory_type(VkPhysicalDevice physical, uint32_t bits, VkMemoryPropertyF
     for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
         if ((bits & (1u << i)) && (properties.memoryTypes[i].propertyFlags & flags) == flags)
             return i;
-    throw std::runtime_error("No suitable Vulkan memory type for scene resources");
+    throw std::runtime_error("No suitable Vulkan memory type for image resources");
 }
 
 }

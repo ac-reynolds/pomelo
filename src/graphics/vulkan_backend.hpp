@@ -1,12 +1,13 @@
 #pragma once
 #include "graphics/camera.hpp"
+#include "graphics/field_view.hpp"
 
 #include <cstdint>
 #include <memory>
 
 namespace simulation { struct InitialConditions; }
 
-namespace graphics { // Shared scene and Vulkan rendering facilities.
+namespace graphics { // Shared Vulkan, simulation, and visualization facilities.
 
 // Native handles are intentionally opaque here so Vulkan never leaks into
 // application code. Chrome unwraps them only in its private implementation.
@@ -42,8 +43,9 @@ public:
     [[nodiscard]] BackendInfo backend_info() const;
     void begin_imgui_frame();
     [[nodiscard]] Frame begin_frame();
-    [[nodiscard]] std::uint64_t prepare_scene(Frame frame, int width, int height);
-    void render_scene(Frame frame, const OrbitCamera& camera);
+    [[nodiscard]] std::uint64_t prepare_viewport(Frame frame, int width, int height);
+    [[nodiscard]] FieldView step_simulation(Frame frame);
+    void render_volume(Frame frame, const FieldView& field, const OrbitCamera& camera);
     void render_imgui(void* draw_data, Frame frame);
     void end_frame(Frame frame);
     void wait_idle();
