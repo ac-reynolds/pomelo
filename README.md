@@ -1,6 +1,6 @@
 # Pomelo
 
-A minimal C++20 starter for SDL3, Vulkan, and Dear ImGui. It opens a four-region editor shell with a rotating cube in the center viewport and empty left, right, and footer panels. Vulkan renders the cube into an offscreen color/depth target, then ImGui displays it in the viewport.
+A C++20 application using SDL3, Vulkan, and Dear ImGui. A compute shader advects a passive density field through a fixed velocity field, and a full-screen ray marcher renders the resulting volume. Collapsible simulation and rendering panels overlay the viewport, with a one-line status bar below.
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ cmake --build build -j
 The first configure needs internet access to fetch the pinned dependencies.
 CMake uses DXC to compile HLSL from `shaders/` to SPIR-V, then runs
 `deployment/embed_spirv.py` to generate C++ source files under `build/generated/Debug/`.
-Shader source or script changes regenerate those files automatically, which are compiled into `scene_renderer`. The
+Shader source or script changes regenerate those files automatically, which are compiled into `scene_renderer` and `simulation`. The
 executable includes the compiled shaders and can run from any working directory.
 
 CMake discovers native `pomelo-dxc` or `dxc` on PATH or in the Vulkan SDK.
@@ -38,12 +38,46 @@ The embedding script can also be run independently:
 python3 deployment/embed_spirv.py build/generated/Debug/cube_vert.spv /tmp/cube_vert.cpp --symbol cube_vert_spirv --header graphics/shaders.hpp
 ```
 
+## Simulation
+
+The default domain has 24³ cell-centered samples, with density increasing linearly from 0 to 1 along x.
+Density uses two R32 float 3D images; the fixed velocity uses one RGBA32 float 3D
+image. Velocity points along x, with speed increasing linearly from 0 at the first
+y sample to 0.5 world units per second at the last. This divergence-free shear
+moves each y slice at a different speed. Both ramps span sample centers; a
+singleton axis has a zero ramp. Periodic boundaries wrap the density ramp from
+its high end back to its low end. The velocity ramp also has a periodic seam
+across y, with no flow through that seam.
+
+Each submitted frame advances one 1/60-second simulation step using backward
+semi-Lagrangian tracing and periodic trilinear interpolation, then renders the
+new density. Simulation speed therefore depends on frame rate. Minimized windows
+pause stepping, and viewport resizing preserves the simulation images.
+
+The default density shears over time. Density does not influence velocity. Buoyancy,
+pressure projection, velocity evolution, and density sources are not implemented.
+Initial conditions and speed are defined in `src/simulation/initial_conditions.*`.
+
+Run the numerical and GPU integration tests with:
+
+```sh
+ctest --test-dir build --output-on-failure
+```
+
+The advection test uses a graphics/compute Vulkan device (a software Vulkan driver
+also works) and automatically enables synchronization validation when the Khronos
+validation layer is available. It checks uniform preservation, periodic transport,
+CPU/GPU agreement, immutable velocity, renderer image selection, and two frames in
+flight with offscreen target resizing. GPU readback is restricted to tests.
+
 ## Source layout
 
 - `src/chrome`: Dear ImGui core context, panel layout, and UI interaction state
+- `src/simulation`: initial conditions, density images, and GPU advection
+- `src/graphics/image.*`: shared Vulkan image allocation and initial upload
 - `src/graphics/scene_renderer.*`: the isolated offscreen viewport producer
 - `src/graphics/vulkan_backend.*`: shared Vulkan state, swapchain presentation, and
   the Dear ImGui Vulkan adapter
 - `src/application`: application loop, SDL window/event ownership, and the Dear ImGui SDL adapter
-- `shaders`: cube vertex and fragment HLSL sources and shared stage interface
+- `shaders`: full-screen vertex, volume fragment, and advection compute HLSL with shared periodic sampling
 - `deployment`: build and deployment helper scripts

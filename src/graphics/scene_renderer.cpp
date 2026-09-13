@@ -17,15 +17,6 @@ void check(VkResult result) {
         throw std::runtime_error("Scene Vulkan call failed: " + std::to_string(result));
 }
 
-uint32_t memory_type(VkPhysicalDevice physical, uint32_t bits, VkMemoryPropertyFlags flags) {
-    VkPhysicalDeviceMemoryProperties properties{};
-    vkGetPhysicalDeviceMemoryProperties(physical, &properties);
-    for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
-        if ((bits & (1u << i)) && (properties.memoryTypes[i].propertyFlags & flags) == flags)
-            return i;
-    throw std::runtime_error("No suitable Vulkan memory type for scene resources");
-}
-
 VkFormat supported_format(VkPhysicalDevice physical, std::initializer_list<VkFormat> formats,
                           VkFormatFeatureFlags features) {
     for (VkFormat format : formats) {
@@ -46,51 +37,8 @@ struct Transform {
 };
 static_assert(offsetof(Transform, origin_spacing) == 64 && sizeof(Transform) == 80);
 
-void create_image(graphics::SceneImage& image, VkPhysicalDevice physical, VkDevice device,
-                  VkExtent2D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect) {
-    VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    info.imageType = VK_IMAGE_TYPE_2D;
-    info.format = format;
-    info.extent = {extent.width, extent.height, 1};
-    info.mipLevels = 1;
-    info.arrayLayers = 1;
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
-    info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = usage;
-    check(vkCreateImage(device, &info, nullptr, &image.image));
-    VkMemoryRequirements requirements{};
-    vkGetImageMemoryRequirements(device, image.image, &requirements);
-    VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocation.allocationSize = requirements.size;
-    allocation.memoryTypeIndex = memory_type(physical, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    check(vkAllocateMemory(device, &allocation, nullptr, &image.memory));
-    check(vkBindImageMemory(device, image.image, image.memory, 0));
-    VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    view.image = image.image;
-    view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view.format = format;
-    view.subresourceRange = {aspect, 0, 1, 0, 1};
-    check(vkCreateImageView(device, &view, nullptr, &image.view));
-}
-
-void destroy_image(graphics::SceneImage& image, VkDevice device) {
-    if (image.view) vkDestroyImageView(device, image.view, nullptr);
-    if (image.image) vkDestroyImage(device, image.image, nullptr);
-    if (image.memory) vkFreeMemory(device, image.memory, nullptr);
-    image = {};
-}
-
-void upload_grid(graphics::SceneResources& scene, VkPhysicalDevice physical, VkDevice device,
-                 VkQueue queue, uint32_t queue_family, const geometry::UniformGrid& grid) {
-    geometry::validate_grid(grid);
-    constexpr VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    VkImageFormatProperties supported{};
-    check(vkGetPhysicalDeviceImageFormatProperties(physical, VK_FORMAT_R32_SFLOAT, VK_IMAGE_TYPE_3D,
-                                                   VK_IMAGE_TILING_OPTIMAL, usage, 0, &supported));
-    const VkExtent3D extent{grid.dimensions[0], grid.dimensions[1], grid.dimensions[2]};
-    if (extent.width > supported.maxExtent.width || extent.height > supported.maxExtent.height ||
-        extent.depth > supported.maxExtent.depth)
-        throw std::invalid_argument("Grid exceeds Vulkan 3D image limits");
+void bind_grid(graphics::SceneResources& scene, VkDevice device,
+               const geometry::UniformGrid& grid, const std::array<VkImageView, 2>& density) {
     double radius_squared = 0;
     for (size_t axis = 0; axis < 3; ++axis) {
         scene.origin_spacing[axis] = grid.origin[axis];
@@ -103,138 +51,40 @@ void upload_grid(graphics::SceneResources& scene, VkPhysicalDevice physical, VkD
     if (!std::isfinite(scene.radius) || scene.radius <= 0)
         throw std::invalid_argument("Grid bounds cannot be represented for rendering");
 
-    VkImageCreateInfo image{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    image.imageType = VK_IMAGE_TYPE_3D;
-    image.format = VK_FORMAT_R32_SFLOAT;
-    image.extent = extent;
-    image.mipLevels = image.arrayLayers = 1;
-    image.samples = VK_SAMPLE_COUNT_1_BIT;
-    image.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image.usage = usage;
-    check(vkCreateImage(device, &image, nullptr, &scene.grid_image.image));
-    VkMemoryRequirements requirements{};
-    vkGetImageMemoryRequirements(device, scene.grid_image.image, &requirements);
-    VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocation.allocationSize = requirements.size;
-    allocation.memoryTypeIndex = memory_type(physical, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    check(vkAllocateMemory(device, &allocation, nullptr, &scene.grid_image.memory));
-    check(vkBindImageMemory(device, scene.grid_image.image, scene.grid_image.memory, 0));
-    VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    view.image = scene.grid_image.image;
-    view.viewType = VK_IMAGE_VIEW_TYPE_3D;
-    view.format = VK_FORMAT_R32_SFLOAT;
-    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    check(vkCreateImageView(device, &view, nullptr, &scene.grid_image.view));
-
-    VkBuffer staging{};
-    VkDeviceMemory staging_memory{};
-    VkCommandPool pool{};
-    VkFence fence{};
-    bool submitted = false;
-    auto cleanup = [&] {
-        if (fence) vkDestroyFence(device, fence, nullptr);
-        if (pool) vkDestroyCommandPool(device, pool, nullptr);
-        if (staging) vkDestroyBuffer(device, staging, nullptr);
-        if (staging_memory) vkFreeMemory(device, staging_memory, nullptr);
-    };
-    try {
-        VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        buffer.size = grid.values.size() * sizeof(float);
-        buffer.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        check(vkCreateBuffer(device, &buffer, nullptr, &staging));
-        vkGetBufferMemoryRequirements(device, staging, &requirements);
-        allocation.allocationSize = requirements.size;
-        allocation.memoryTypeIndex = memory_type(physical, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
-        check(vkAllocateMemory(device, &allocation, nullptr, &staging_memory));
-        check(vkBindBufferMemory(device, staging, staging_memory, 0));
-        void* mapped{};
-        check(vkMapMemory(device, staging_memory, 0, VK_WHOLE_SIZE, 0, &mapped));
-        std::memcpy(mapped, grid.values.data(), static_cast<size_t>(buffer.size));
-        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-        range.memory = staging_memory;
-        range.size = VK_WHOLE_SIZE;
-        const VkResult flushed = vkFlushMappedMemoryRanges(device, 1, &range);
-        vkUnmapMemory(device, staging_memory);
-        check(flushed);
-        VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-        pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        pool_info.queueFamilyIndex = queue_family;
-        check(vkCreateCommandPool(device, &pool_info, nullptr, &pool));
-        VkCommandBufferAllocateInfo commands{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        commands.commandPool = pool;
-        commands.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        commands.commandBufferCount = 1;
-        VkCommandBuffer command{};
-        check(vkAllocateCommandBuffers(device, &commands, &command));
-        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(command, &begin));
-        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = scene.grid_image.image;
-        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &barrier);
-        VkBufferImageCopy copy{};
-        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.imageExtent = extent;
-        vkCmdCopyBufferToImage(command, staging, scene.grid_image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &barrier);
-        check(vkEndCommandBuffer(command));
-        VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        check(vkCreateFence(device, &fence_info, nullptr, &fence));
-        VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        submit.commandBufferCount = 1;
-        submit.pCommandBuffers = &command;
-        check(vkQueueSubmit(queue, 1, &submit, fence));
-        submitted = true;
-        check(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
-    } catch (...) {
-        if (submitted) vkDeviceWaitIdle(device);
-        cleanup();
-        throw;
-    }
-    cleanup();
-
     VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     layout.bindingCount = 1;
     layout.pBindings = &binding;
     check(vkCreateDescriptorSetLayout(device, &layout, nullptr, &scene.grid_layout));
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2};
     VkDescriptorPoolCreateInfo descriptor_pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    descriptor_pool.maxSets = descriptor_pool.poolSizeCount = 1;
+    descriptor_pool.maxSets = 2;
+    descriptor_pool.poolSizeCount = 1;
     descriptor_pool.pPoolSizes = &size;
     check(vkCreateDescriptorPool(device, &descriptor_pool, nullptr, &scene.grid_pool));
     VkDescriptorSetAllocateInfo descriptor{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     descriptor.descriptorPool = scene.grid_pool;
     descriptor.descriptorSetCount = 1;
     descriptor.pSetLayouts = &scene.grid_layout;
-    check(vkAllocateDescriptorSets(device, &descriptor, &scene.grid_set));
-    VkDescriptorImageInfo image_binding{VK_NULL_HANDLE, scene.grid_image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = scene.grid_set;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    write.pImageInfo = &image_binding;
-    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    for (size_t i = 0; i < density.size(); ++i) {
+        check(vkAllocateDescriptorSets(device, &descriptor, &scene.grid_sets[i]));
+        VkDescriptorImageInfo image_binding{VK_NULL_HANDLE, density[i], VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = scene.grid_sets[i];
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        write.pImageInfo = &image_binding;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
 }
 
 } // namespace
 
 void graphics::create_scene(SceneResources& scene, VkPhysicalDevice physical, VkDevice device,
-                            VkQueue queue, uint32_t queue_family, const geometry::UniformGrid& grid) {
+                            const geometry::UniformGrid& grid, const std::array<VkImageView, 2>& density) {
     VkShaderModule vertex_shader{}, fragment_shader{};
     try {
-        upload_grid(scene, physical, device, queue, queue_family, grid);
+        bind_grid(scene, device, grid, density);
         scene.color_format = supported_format(physical, {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM},
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
             VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
@@ -365,7 +215,6 @@ void graphics::destroy_scene(SceneResources& scene, VkDevice device) {
     if (scene.render_pass) vkDestroyRenderPass(device, scene.render_pass, nullptr);
     if (scene.grid_pool) vkDestroyDescriptorPool(device, scene.grid_pool, nullptr);
     if (scene.grid_layout) vkDestroyDescriptorSetLayout(device, scene.grid_layout, nullptr);
-    destroy_image(scene.grid_image, device);
     scene = {};
 }
 
@@ -373,9 +222,10 @@ void graphics::create_scene_target(SceneTarget& target, const SceneResources& sc
                                   VkPhysicalDevice physical, VkDevice device, VkExtent2D extent) {
     try {
         target.extent = extent;
-        create_image(target.color, physical, device, extent, scene.color_format,
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-        create_image(target.depth, physical, device, extent, scene.depth_format,
+        gpu::create_image(target.color, physical, device, {extent.width, extent.height, 1}, VK_IMAGE_TYPE_2D, scene.color_format,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        gpu::create_image(target.depth, physical, device, {extent.width, extent.height, 1}, VK_IMAGE_TYPE_2D, scene.depth_format,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
         const VkImageView views[] = {target.color.view, target.depth.view};
         VkFramebufferCreateInfo framebuffer{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
@@ -394,13 +244,13 @@ void graphics::create_scene_target(SceneTarget& target, const SceneResources& sc
 
 void graphics::destroy_scene_target(SceneTarget& target, VkDevice device) {
     if (target.framebuffer) vkDestroyFramebuffer(device, target.framebuffer, nullptr);
-    destroy_image(target.depth, device);
-    destroy_image(target.color, device);
+    gpu::destroy_image(target.depth, device);
+    gpu::destroy_image(target.color, device);
     target = {};
 }
 
 void graphics::record_scene(const SceneResources& scene, const SceneTarget& target,
-                           VkCommandBuffer command_buffer, double elapsed_seconds) {
+                           VkCommandBuffer command_buffer, double elapsed_seconds, uint32_t density_index) {
     const float angle = static_cast<float>(std::fmod(elapsed_seconds * 0.7, 6.283185307179586));
     const float c = std::cos(angle), s = std::sin(angle);
     const float tilt = -0.35f, ct = std::cos(tilt), st = std::sin(tilt);
@@ -435,7 +285,7 @@ void graphics::record_scene(const SceneResources& scene, const SceneTarget& targ
     vkCmdSetViewport(command_buffer, 0, 1, &viewport);
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
     vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene.layout,
-                            0, 1, &scene.grid_set, 0, nullptr);
+                            0, 1, &scene.grid_sets.at(density_index), 0, nullptr);
     vkCmdPushConstants(command_buffer, scene.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(transform), &transform);
     vkCmdDraw(command_buffer, 3, 1, 0, 0);
     vkCmdEndRenderPass(command_buffer);

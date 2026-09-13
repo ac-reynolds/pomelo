@@ -1,3 +1,4 @@
+#include "volume_sampling.hlsli"
 #include "cube_interface.hlsli"
 
 struct Transform {
@@ -9,22 +10,6 @@ struct Transform {
 };
 [[vk::push_constant]] ConstantBuffer<Transform> transform;
 [[vk::binding(0, 0)]] Texture3D<float> grid_values;
-
-// Explicit trilinear interpolation also works without R32_SFLOAT linear-filter support.
-// The existing grid stores its samples at origin + (index + 0.5) * spacing.
-float sample_volume(float3 position, uint3 dimensions) {
-    float3 node = clamp(position - 0.5, 0.0, float3(dimensions - 1));
-    int3 lo = int3(floor(node));
-    int3 hi = min(lo + 1, int3(dimensions) - 1);
-    float3 f = frac(node);
-    float z0 = lerp(
-        lerp(grid_values.Load(int4(lo.x, lo.y, lo.z, 0)), grid_values.Load(int4(hi.x, lo.y, lo.z, 0)), f.x),
-        lerp(grid_values.Load(int4(lo.x, hi.y, lo.z, 0)), grid_values.Load(int4(hi.x, hi.y, lo.z, 0)), f.x), f.y);
-    float z1 = lerp(
-        lerp(grid_values.Load(int4(lo.x, lo.y, hi.z, 0)), grid_values.Load(int4(hi.x, lo.y, hi.z, 0)), f.x),
-        lerp(grid_values.Load(int4(lo.x, hi.y, hi.z, 0)), grid_values.Load(int4(hi.x, hi.y, hi.z, 0)), f.x), f.y);
-    return lerp(z0, z1, f.z);
-}
 
 // RGB emission color and extinction per grid-spacing unit.
 float4 transfer(float value) {
@@ -66,7 +51,7 @@ float4 main(VolumeVaryings input) : SV_Target0 {
     [loop]
     for (float t = entry; t < exit_distance; t += step_size) {
         float segment = min(step_size, exit_distance - t);
-        float value = sample_volume(origin + direction * (t + 0.5 * segment), dimensions);
+        float value = periodic_trilinear(grid_values, origin + direction * (t + 0.5 * segment) - 0.5, dimensions);
         float4 material = transfer(value);
         float alpha = 1.0 - exp(-material.a * segment);
         accumulated += transmittance * alpha * material.rgb;

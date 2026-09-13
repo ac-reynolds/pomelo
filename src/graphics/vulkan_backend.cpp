@@ -1,5 +1,6 @@
 #include "graphics/vulkan_backend.hpp"
 #include "graphics/scene_renderer.hpp"
+#include "simulation/advection.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -58,6 +59,8 @@ struct VulkanContext {
     std::vector<PresentImage> present_images;
     uint32_t frame_index{};
     graphics::SceneResources scene;
+    simulation::Advection simulation;
+    bool step_recorded{};
     bool imgui_initialized{};
     bool swapchain_dirty{};
 
@@ -97,7 +100,8 @@ struct VulkanContext {
             for (uint32_t i = 0; i < count; ++i) {
                 VkBool32 present = VK_FALSE;
                 vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface, &present);
-                if ((properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present) {
+                if ((properties[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) ==
+                    (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT) && present) {
                     physical_device = candidate;
                     queue_family = i;
                     break;
@@ -107,7 +111,7 @@ struct VulkanContext {
                 break;
         }
         if (!physical_device)
-            fail("No graphics/present Vulkan queue was found");
+            fail("No graphics/compute/present Vulkan queue was found");
 
         constexpr float priority = 1.0f;
         VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -352,6 +356,8 @@ struct VulkanContext {
         submit.pSignalSemaphores = &image.render_complete;
         vk_check(vkResetFences(device, 1, &frame.fence));
         vk_check(vkQueueSubmit(queue, 1, &submit, frame.fence));
+        if (step_recorded) ++simulation.submitted_steps;
+        step_recorded = false;
         VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         present.waitSemaphoreCount = 1;
         present.pWaitSemaphores = &image.render_complete;
@@ -369,6 +375,7 @@ struct VulkanContext {
             vkDeviceWaitIdle(device);
             destroy_swapchain();
             graphics::destroy_scene(scene, device);
+            simulation::destroy_advection(simulation, device);
             if (imgui_initialized) ImGui_ImplVulkan_Shutdown();
             if (descriptor_pool) vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
             vkDestroyDevice(device, nullptr);
@@ -385,13 +392,15 @@ struct graphics::VulkanBackend::Impl {
     VulkanContext vk;
 };
 
-graphics::VulkanBackend::VulkanBackend(void* native_window, const geometry::UniformGrid& grid) : impl_(std::make_unique<Impl>()) {
+graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::InitialConditions& initial) : impl_(std::make_unique<Impl>()) {
     impl_->window = static_cast<SDL_Window*>(native_window);
     try {
         impl_->vk.create(impl_->window);
         impl_->vk.initialize_imgui();
-        create_scene(impl_->vk.scene, impl_->vk.physical_device, impl_->vk.device,
-                     impl_->vk.queue, impl_->vk.queue_family, grid);
+        auto& vk = impl_->vk;
+        simulation::create_advection(vk.simulation, vk.physical_device, vk.device, vk.queue, vk.queue_family, initial);
+        create_scene(vk.scene, vk.physical_device, vk.device, initial.density,
+                     {vk.simulation.density[0].view, vk.simulation.density[1].view});
     } catch (...) {
         impl_->vk.destroy();
         throw;
@@ -437,8 +446,12 @@ std::uint64_t graphics::VulkanBackend::prepare_scene(Frame token, int width, int
 }
 
 void graphics::VulkanBackend::render_scene(Frame token, double elapsed_seconds) {
-    const auto& vk = impl_->vk;
+    auto& vk = impl_->vk;
     const auto& frame = vk.frames[token.frame_index];
-    if (frame.target.framebuffer)
-        record_scene(vk.scene, frame.target, frame.command_buffer, elapsed_seconds);
+    if (vk.step_recorded) throw std::logic_error("Simulation already recorded for this frame");
+    if (frame.target.framebuffer) {
+        const auto destination = simulation::record_advection(vk.simulation, frame.command_buffer);
+        record_scene(vk.scene, frame.target, frame.command_buffer, elapsed_seconds, destination);
+        vk.step_recorded = true;
+    }
 }

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace geometry { struct UniformGrid; }
+namespace simulation { struct InitialConditions; }
 
 namespace graphics { // Shared scene and Vulkan rendering facilities.
 
@@ -31,7 +31,7 @@ struct Frame {
 // resources and the ImGui Vulkan adapter are destroyed before their device/instance.
 class VulkanBackend {
 public:
-    VulkanBackend(void* native_window, const geometry::UniformGrid& grid);
+    VulkanBackend(void* native_window, const simulation::InitialConditions& initial);
     ~VulkanBackend();
     VulkanBackend(VulkanBackend&&) = delete;
     VulkanBackend& operator=(VulkanBackend&&) = delete;
