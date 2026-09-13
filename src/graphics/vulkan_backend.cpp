@@ -58,7 +58,8 @@ struct VulkanContext {
     std::vector<Frame> frames;
     std::vector<PresentImage> present_images;
     uint32_t frame_index{};
-    graphics::VolumeViewResources volume_view;
+    graphics::VolumePipeline volume_pipeline;
+    std::array<graphics::VolumeView, 2> volume_views;
     simulation::SimulationFields fields;
     simulation::AdvectionStep pending_step;
     simulation::Advection simulation;
@@ -376,7 +377,8 @@ struct VulkanContext {
         if (device) {
             vkDeviceWaitIdle(device);
             destroy_swapchain();
-            graphics::destroy_volume_view(volume_view, device);
+            for (auto& view : volume_views) graphics::destroy_volume_view(view, device);
+            graphics::destroy_volume_pipeline(volume_pipeline, device);
             simulation::destroy_advection(simulation, device);
             simulation::destroy_fields(fields, device);
             if (imgui_initialized) ImGui_ImplVulkan_Shutdown();
@@ -404,7 +406,9 @@ graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::In
         simulation::create_fields(vk.fields, vk.physical_device, vk.device, vk.queue, vk.queue_family, initial);
         const std::array fields{simulation::density_view(vk.fields, 0, 0), simulation::density_view(vk.fields, 1, 0)};
         simulation::create_advection(vk.simulation, vk.physical_device, vk.device, fields, simulation::velocity_view(vk.fields));
-        create_volume_view(vk.volume_view, vk.physical_device, vk.device, fields);
+        create_volume_pipeline(vk.volume_pipeline, vk.physical_device, vk.device);
+        for (size_t i = 0; i < fields.size(); ++i)
+            create_volume_view(vk.volume_views[i], vk.device, vk.volume_pipeline, fields[i]);
     } catch (...) {
         impl_->vk.destroy();
         throw;
@@ -443,7 +447,7 @@ std::uint64_t graphics::VulkanBackend::prepare_viewport(Frame token, int width, 
         if (frame.texture) ImGui_ImplVulkan_RemoveTexture(frame.texture);
         frame.texture = VK_NULL_HANDLE;
         destroy_render_target(frame.target, vk.device);
-        create_render_target(frame.target, {vk.volume_view.render_pass, vk.volume_view.color_format, vk.volume_view.depth_format}, vk.physical_device, vk.device, extent);
+        create_render_target(frame.target, {vk.volume_pipeline.render_pass, vk.volume_pipeline.color_format, vk.volume_pipeline.depth_format}, vk.physical_device, vk.device, extent);
         frame.texture = ImGui_ImplVulkan_AddTexture(frame.target.color.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
     return reinterpret_cast<std::uintptr_t>(frame.texture);
@@ -461,6 +465,12 @@ graphics::FieldView graphics::VulkanBackend::step_simulation(Frame token) {
 void graphics::VulkanBackend::render_volume(Frame token, const FieldView& field, const OrbitCamera& camera) {
     const auto& vk = impl_->vk;
     const auto& frame = vk.frames[token.frame_index];
-    if (frame.target.framebuffer)
-        record_volume_view(vk.volume_view, frame.target, frame.command_buffer, camera, field);
+    if (!frame.target.framebuffer) return;
+    for (const auto& view : vk.volume_views) {
+        if (same_field_binding(view.field, field)) {
+            record_volume_view(view, frame.target, frame.command_buffer, camera);
+            return;
+        }
+    }
+    throw std::invalid_argument("No volume view configured for the selected field");
 }

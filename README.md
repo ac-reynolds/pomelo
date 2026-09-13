@@ -85,7 +85,9 @@ Project code builds as three libraries:
 
 Within `src/graphics`, `fields.*` owns simulation images and their current versions,
 `advection.*` records operations against borrowed fields, `volume_view.*`
-visualizes a selected scalar field, and `render_target.*` owns offscreen output
+binds each volume view to one scalar field at creation, sharing pipeline state
+between views. Frame composition selects the view for the latest output; the
+recorder takes only that view, a target, and a camera. `render_target.*` owns offscreen output
 attachments. `field_view.hpp` describes borrowed image versions and their domain.
 `image.*` provides shared image helpers, and `vulkan_backend.*`
 owns the Vulkan object graph and submission. `initial_conditions.*` and

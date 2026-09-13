@@ -36,48 +36,16 @@ struct Transform {
 };
 static_assert(offsetof(Transform, origin_spacing) == 64 && sizeof(Transform) == 80);
 
-void bind_grid(graphics::VolumeViewResources& view, VkDevice device,
-               std::span<const graphics::FieldView> fields) {
-    if (fields.empty()) throw std::invalid_argument("Volume view needs at least one field");
-    view.fields.assign(fields.begin(), fields.end());
-    view.grid_sets.resize(fields.size());
-    for (const auto& field : fields)
-        if (field.format != VK_FORMAT_R32_SFLOAT)
-            throw std::invalid_argument("Volume view currently supports scalar R32 fields");
-    VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout.bindingCount = 1;
-    layout.pBindings = &binding;
-    check(vkCreateDescriptorSetLayout(device, &layout, nullptr, &view.grid_layout));
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, static_cast<uint32_t>(fields.size())};
-    VkDescriptorPoolCreateInfo descriptor_pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    descriptor_pool.maxSets = static_cast<uint32_t>(fields.size());
-    descriptor_pool.poolSizeCount = 1;
-    descriptor_pool.pPoolSizes = &size;
-    check(vkCreateDescriptorPool(device, &descriptor_pool, nullptr, &view.grid_pool));
-    VkDescriptorSetAllocateInfo descriptor{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    descriptor.descriptorPool = view.grid_pool;
-    descriptor.descriptorSetCount = 1;
-    descriptor.pSetLayouts = &view.grid_layout;
-    for (size_t i = 0; i < fields.size(); ++i) {
-        check(vkAllocateDescriptorSets(device, &descriptor, &view.grid_sets[i]));
-        VkDescriptorImageInfo image_binding{VK_NULL_HANDLE, fields[i].image.view, fields[i].layout};
-        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet = view.grid_sets[i];
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        write.pImageInfo = &image_binding;
-        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-    }
-}
-
 } // namespace
 
-void graphics::create_volume_view(VolumeViewResources& view, VkPhysicalDevice physical, VkDevice device,
-                            std::span<const graphics::FieldView> fields) {
+void graphics::create_volume_pipeline(VolumePipeline& view, VkPhysicalDevice physical, VkDevice device) {
     VkShaderModule vertex_shader{}, fragment_shader{};
     try {
-        bind_grid(view, device, fields);
+        VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo descriptor_layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        descriptor_layout.bindingCount = 1;
+        descriptor_layout.pBindings = &binding;
+        check(vkCreateDescriptorSetLayout(device, &descriptor_layout, nullptr, &view.field_layout));
         view.color_format = supported_format(physical, {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM},
             VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
             VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
@@ -135,7 +103,7 @@ void graphics::create_volume_view(VolumeViewResources& view, VkPhysicalDevice ph
         VkPushConstantRange constants{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Transform)};
         VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         layout.setLayoutCount = 1;
-        layout.pSetLayouts = &view.grid_layout;
+        layout.pSetLayouts = &view.field_layout;
         layout.pushConstantRangeCount = 1;
         layout.pPushConstantRanges = &constants;
         check(vkCreatePipelineLayout(device, &layout, nullptr, &view.layout));
@@ -195,29 +163,59 @@ void graphics::create_volume_view(VolumeViewResources& view, VkPhysicalDevice ph
     } catch (...) {
         if (fragment_shader) vkDestroyShaderModule(device, fragment_shader, nullptr);
         if (vertex_shader) vkDestroyShaderModule(device, vertex_shader, nullptr);
-        destroy_volume_view(view, device);
+        destroy_volume_pipeline(view, device);
         throw;
     }
     vkDestroyShaderModule(device, fragment_shader, nullptr);
     vkDestroyShaderModule(device, vertex_shader, nullptr);
 }
 
-void graphics::destroy_volume_view(VolumeViewResources& view, VkDevice device) {
+void graphics::destroy_volume_pipeline(VolumePipeline& view, VkDevice device) {
     if (view.pipeline) vkDestroyPipeline(device, view.pipeline, nullptr);
     if (view.layout) vkDestroyPipelineLayout(device, view.layout, nullptr);
     if (view.render_pass) vkDestroyRenderPass(device, view.render_pass, nullptr);
-    if (view.grid_pool) vkDestroyDescriptorPool(device, view.grid_pool, nullptr);
-    if (view.grid_layout) vkDestroyDescriptorSetLayout(device, view.grid_layout, nullptr);
+    if (view.field_layout) vkDestroyDescriptorSetLayout(device, view.field_layout, nullptr);
     view = {};
 }
 
-void graphics::record_volume_view(const VolumeViewResources& view, const RenderTarget& target,
-                           VkCommandBuffer command_buffer, const OrbitCamera& camera, const FieldView& field) {
-    size_t binding = 0;
-    while (binding < view.fields.size() && view.fields[binding].image.view != field.image.view) ++binding;
-    if (binding == view.fields.size() || !same_field_binding(view.fields[binding], field))
-        throw std::invalid_argument("Field has no compatible volume binding");
-    const auto& grid = field.domain;
+void graphics::create_volume_view(VolumeView& view, VkDevice device, const VolumePipeline& pipeline,
+                                  const FieldView& field) {
+    if (field.format != VK_FORMAT_R32_SFLOAT || !field.image.view ||
+        (field.layout != VK_IMAGE_LAYOUT_GENERAL && field.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
+        throw std::invalid_argument("Volume view requires a sampled scalar R32 field");
+    try {
+        view.pipeline = &pipeline;
+        view.field = field;
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
+        VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pool.maxSets = 1;
+        pool.poolSizeCount = 1;
+        pool.pPoolSizes = &size;
+        check(vkCreateDescriptorPool(device, &pool, nullptr, &view.pool));
+        VkDescriptorSetAllocateInfo descriptor{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        descriptor.descriptorPool = view.pool;
+        descriptor.descriptorSetCount = 1;
+        descriptor.pSetLayouts = &pipeline.field_layout;
+        check(vkAllocateDescriptorSets(device, &descriptor, &view.set));
+        VkDescriptorImageInfo image{VK_NULL_HANDLE, field.image.view, field.layout};
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = view.set;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        write.pImageInfo = &image;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    } catch (...) { destroy_volume_view(view, device); throw; }
+}
+
+void graphics::destroy_volume_view(VolumeView& view, VkDevice device) {
+    if (view.pool) vkDestroyDescriptorPool(device, view.pool, nullptr);
+    view = {};
+}
+
+void graphics::record_volume_view(const VolumeView& view, const RenderTarget& target,
+                                 VkCommandBuffer command_buffer, const OrbitCamera& camera) {
+    const auto& pipeline = *view.pipeline;
+    const auto& grid = view.field.domain;
     std::array<float, 4> origin_spacing{};
     std::array<float, 3> center{};
     float radius{};
@@ -255,20 +253,20 @@ void graphics::record_volume_view(const VolumeViewResources& view, const RenderT
     clear[0].color = {{0.055f, 0.065f, 0.085f, 1.0f}};
     clear[1].depthStencil = {1.0f, 0};
     VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    pass.renderPass = view.render_pass;
+    pass.renderPass = pipeline.render_pass;
     pass.framebuffer = target.framebuffer;
     pass.renderArea.extent = target.extent;
     pass.clearValueCount = static_cast<uint32_t>(clear.size());
     pass.pClearValues = clear.data();
     vkCmdBeginRenderPass(command_buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, view.pipeline);
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipeline);
     VkViewport viewport{0, 0, static_cast<float>(target.extent.width), static_cast<float>(target.extent.height), 0, 1};
     VkRect2D scissor{{0, 0}, target.extent};
     vkCmdSetViewport(command_buffer, 0, 1, &viewport);
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
-    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, view.layout,
-                            0, 1, &view.grid_sets.at(binding), 0, nullptr);
-    vkCmdPushConstants(command_buffer, view.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(transform), &transform);
+    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout,
+                            0, 1, &view.set, 0, nullptr);
+    vkCmdPushConstants(command_buffer, pipeline.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(transform), &transform);
     vkCmdDraw(command_buffer, 3, 1, 0, 0);
     vkCmdEndRenderPass(command_buffer);
 }

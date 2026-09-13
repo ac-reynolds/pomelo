@@ -208,11 +208,13 @@ std::vector<float> reference(const simulation::InitialConditions& initial, const
 void run(Context& c, const char* name, const simulation::InitialConditions& initial, unsigned steps, float dt) {
     simulation::SimulationFields fields;
     simulation::Advection sim;
-    graphics::VolumeViewResources scene;
+    graphics::VolumePipeline pipeline;
+    std::array<graphics::VolumeView, 2> volume_views;
     auto cleanup = [&] {
         vkDeviceWaitIdle(c.device);
         for (auto& slot : c.slots) graphics::destroy_render_target(slot.target, c.device);
-        graphics::destroy_volume_view(scene, c.device);
+        for (auto& view : volume_views) graphics::destroy_volume_view(view, c.device);
+        graphics::destroy_volume_pipeline(pipeline, c.device);
         simulation::destroy_advection(sim, c.device);
         simulation::destroy_fields(fields, c.device);
     };
@@ -220,22 +222,24 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
         simulation::create_fields(fields, c.physical, c.device, c.queue, c.family, initial);
         const std::array views{simulation::density_view(fields, 0, 0), simulation::density_view(fields, 1, 0)};
         simulation::create_advection(sim, c.physical, c.device, views, simulation::velocity_view(fields));
-        graphics::create_volume_view(scene, c.physical, c.device, views);
-        for (auto& slot : c.slots) graphics::create_render_target(slot.target, {scene.render_pass, scene.color_format, scene.depth_format}, c.physical, c.device, {16, 16});
+        graphics::create_volume_pipeline(pipeline, c.physical, c.device);
+        for (size_t i = 0; i < views.size(); ++i)
+            graphics::create_volume_view(volume_views[i], c.device, pipeline, views[i]);
+        for (auto& slot : c.slots) graphics::create_render_target(slot.target, {pipeline.render_pass, pipeline.color_format, pipeline.depth_format}, c.physical, c.device, {16, 16});
         auto expected = initial.density.values;
         for (unsigned i = 0; i < steps; ++i) {
             auto& slot = c.slots[i % 2]; begin(c, slot);
             // Recreate only the retired target while another frame can still be in flight.
             if (i == 3) {
                 graphics::destroy_render_target(slot.target, c.device);
-                graphics::create_render_target(slot.target, {scene.render_pass, scene.color_format, scene.depth_format}, c.physical, c.device, {20, 12});
+                graphics::create_render_target(slot.target, {pipeline.render_pass, pipeline.color_format, pipeline.depth_format}, c.physical, c.device, {20, 12});
             }
             const auto step = simulation::prepare_advection(fields, dt);
             simulation::record_advection(sim, slot.command, step);
             require(fields.submitted_steps == i, "Recording committed simulation state prematurely");
             const auto output = step.output;
             require(output.image.view == fields.density[(i + 1) % 2].view, "Wrong output parity");
-            graphics::record_volume_view(scene, slot.target, slot.command, {}, output);
+            graphics::record_volume_view(volume_views[(i + 1) % 2], slot.target, slot.command, {});
             submit(c, slot); simulation::commit_step(fields, step);
             if (i == 0) {
                 bool rejected = false;
@@ -274,7 +278,7 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             std::array<std::vector<float>, 2> pixels;
             for (uint32_t image = 0; image < 2; ++image) {
                 auto& slot = c.slots[0]; begin(c, slot);
-                graphics::record_volume_view(scene, slot.target, slot.command, {}, views[image]);
+                graphics::record_volume_view(volume_views[image], slot.target, slot.command, {});
                 submit(c, slot);
                 pixels[image] = read_image(c, slot.target.color,
                     {slot.target.extent.width, slot.target.extent.height, 1}, 1,
