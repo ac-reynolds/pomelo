@@ -43,7 +43,7 @@ where you leave it; there is no automatic rotation or panning.
 
 ## Simulation
 
-The default domain has 24³ cell-centered samples, with density increasing linearly from 0 to 1 along x.
+The default domain has 64³ cell-centered samples, with density increasing linearly from 0 to 1 along x.
 Density uses two R32 float 3D images; velocity uses two RGBA32 float 3D
 image. Velocity points along x, with speed increasing linearly from 0 at the first
 y sample to 0.5 world units per second at the last. This divergence-free shear

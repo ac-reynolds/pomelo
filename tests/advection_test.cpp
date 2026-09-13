@@ -323,7 +323,12 @@ int main() {
     Context c;
     try {
         if (!create(c)) { destroy(c); std::puts("No graphics/compute Vulkan device; skipped"); return 77; }
-        auto shear = simulation::initial_conditions();
+        const auto defaults = simulation::initial_conditions();
+        require(defaults.density.dimensions == std::array<uint32_t, 3>{64, 64, 64} &&
+                defaults.density.spacing == 2.0f / 64, "Default grid and domain");
+        run(c, "default resolution", defaults, 1, simulation::timestep);
+        // Keep the long numerical regression at its explicit reference resolution.
+        auto shear = simulation::initial_conditions({24, 24, 24}, {-1, -1, -1}, 2.0f / 24);
         const auto& grid = shear.density;
         require(grid.values.front() == 0 && grid.values[23] == 1, "Density ramp endpoints");
         require(shear.velocity.front()[0] == 0 && shear.velocity[24*23][0] == 0.5f,
