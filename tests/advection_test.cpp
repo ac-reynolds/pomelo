@@ -1,4 +1,5 @@
 #include "graphics/advection.hpp"
+#include "graphics/divergence.hpp"
 #include "graphics/volume_view.hpp"
 #include <algorithm>
 #include <cmath>
@@ -208,13 +209,17 @@ std::vector<float> reference(const simulation::InitialConditions& initial, const
 void run(Context& c, const char* name, const simulation::InitialConditions& initial, unsigned steps, float dt) {
     simulation::SimulationFields fields;
     simulation::Advection sim;
+    simulation::Divergence divergence;
+    graphics::VolumeView divergence_volume;
     graphics::VolumePipeline pipeline;
     std::array<graphics::VolumeView, 2> volume_views;
     auto cleanup = [&] {
         vkDeviceWaitIdle(c.device);
         for (auto& slot : c.slots) graphics::destroy_render_target(slot.target, c.device);
         for (auto& view : volume_views) graphics::destroy_volume_view(view, c.device);
+        graphics::destroy_volume_view(divergence_volume, c.device);
         graphics::destroy_volume_pipeline(pipeline, c.device);
+        simulation::destroy_divergence(divergence, c.device);
         simulation::destroy_advection(sim, c.device);
         simulation::destroy_fields(fields, c.device);
     };
@@ -222,7 +227,11 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
         simulation::create_fields(fields, c.physical, c.device, c.queue, c.family, initial);
         const std::array views{simulation::density_view(fields, 0, 0), simulation::density_view(fields, 1, 0)};
         simulation::create_advection(sim, c.physical, c.device, views, {simulation::velocity_view(fields, 0, 0), simulation::velocity_view(fields, 1, 0)});
+        simulation::create_divergence(divergence, c.physical, c.device,
+            {simulation::velocity_view(fields, 0, 0), simulation::velocity_view(fields, 1, 0)},
+            simulation::divergence_view(fields, 0));
         graphics::create_volume_pipeline(pipeline, c.physical, c.device);
+        graphics::create_volume_view(divergence_volume, c.device, pipeline, simulation::divergence_view(fields, 0), true);
         for (size_t i = 0; i < views.size(); ++i)
             graphics::create_volume_view(volume_views[i], c.device, pipeline, views[i]);
         for (auto& slot : c.slots) graphics::create_render_target(slot.target, {pipeline.render_pass, pipeline.color_format, pipeline.depth_format}, c.physical, c.device, {16, 16});
@@ -237,6 +246,8 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             }
             const auto step = simulation::prepare_advection(fields, dt);
             simulation::record_advection(sim, slot.command, step);
+            simulation::record_divergence(divergence, slot.command, step.velocity_output);
+            graphics::record_volume_view(divergence_volume, slot.target, slot.command, {});
             require(fields.submitted_steps == i, "Recording committed simulation state prematurely");
             const auto output = step.output;
             require(output.image.view == fields.density[(i + 1) % 2].view, "Wrong output parity");
@@ -294,6 +305,38 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             }
         }
         require(velocity_error < tolerance, "Advected velocity differs from CPU reference");
+        const auto divergence_values = read_image(c, fields.divergence, extent, 1, VK_IMAGE_LAYOUT_GENERAL);
+        float divergence_error = 0, magnitude = 0;
+        const auto n = fields.domain.dimensions;
+        for (uint32_t z = 0; z < n[2]; ++z)
+            for (uint32_t y = 0; y < n[1]; ++y)
+                for (uint32_t x = 0; x < n[0]; ++x) {
+                    const std::array<uint32_t, 3> cell{x, y, z};
+                    double expected_divergence = 0;
+                    for (size_t axis = 0; axis < 3; ++axis) {
+                        auto lo = cell, hi = cell;
+                        lo[axis] = (cell[axis] + n[axis] - 1) % n[axis];
+                        hi[axis] = (cell[axis] + 1) % n[axis];
+                        const auto l = geometry::cell_index(initial.density, lo[0], lo[1], lo[2]);
+                        const auto h = geometry::cell_index(initial.density, hi[0], hi[1], hi[2]);
+                        expected_divergence += (double(velocity[4*h+axis]) - velocity[4*l+axis]) / (2 * fields.domain.spacing);
+                    }
+                    const auto index = geometry::cell_index(initial.density, x, y, z);
+                    require(std::isfinite(divergence_values[index]), "Nonfinite divergence");
+                    divergence_error = std::max(divergence_error, float(std::abs(divergence_values[index] - expected_divergence)));
+                    magnitude = std::max(magnitude, std::abs(divergence_values[index]));
+                }
+        require(divergence_error < 1e-5f, "Divergence differs from central differences of new velocity");
+        if (std::strcmp(name, "velocity self-advection") == 0 || std::strcmp(name, "divergence stencil") == 0 || std::strcmp(name, "default resolution") == 0)
+            require(magnitude > 0.01f, "Expected nonzero divergence");
+        if (std::strcmp(name, "initial crossed flow") == 0)
+            require(magnitude < 1e-6f, "Initial crossed flow is not divergence-free");
+        if (std::strcmp(name, "divergence stencil") == 0) {
+            // v=(x,2y,-0.5z) has divergence 2.5 away from the periodic seams.
+            const auto index = geometry::cell_index(initial.density, 2, 2, 1);
+            require(std::abs(divergence_values[index] - 2.5f) < 1e-5f, "Incorrect derivative scale or component");
+        }
+
         if (std::strcmp(name, "velocity self-advection") == 0)
             require(velocity_change > 0.01f, "Velocity self-advection did not evolve the field");
         if (std::strcmp(name, "integer periodic shift") == 0) {
@@ -326,9 +369,14 @@ int main() {
         const auto defaults = simulation::initial_conditions();
         require(defaults.density.dimensions == std::array<uint32_t, 3>{64, 64, 64} &&
                 defaults.density.spacing == 2.0f / 64, "Default grid and domain");
+        run(c, "initial crossed flow", defaults, 1, 0);
         run(c, "default resolution", defaults, 1, simulation::timestep);
         // Keep the long numerical regression at its explicit reference resolution.
         auto shear = simulation::initial_conditions({24, 24, 24}, {-1, -1, -1}, 2.0f / 24);
+        for (uint32_t z = 0; z < 24; ++z)
+            for (uint32_t y = 0; y < 24; ++y)
+                for (uint32_t x = 0; x < 24; ++x)
+                    shear.velocity[geometry::cell_index(shear.density, x, y, z)] = {0.5f * y / 23, 0, 0, 0};
         const auto& grid = shear.density;
         require(grid.values.front() == 0 && grid.values[23] == 1, "Density ramp endpoints");
         require(shear.velocity.front()[0] == 0 && shear.velocity[24*23][0] == 0.5f,
@@ -368,6 +416,13 @@ int main() {
                         float(-0.4 * std::sin(6.283185307 * x / 9)), 0};
                 }
         run(c, "velocity self-advection", evolving, 17, 0.1f);
+        auto stencil = simulation::initial_conditions({7, 5, 3}, {}, 0.25f);
+        for (uint32_t z = 0; z < 3; ++z)
+            for (uint32_t y = 0; y < 5; ++y)
+                for (uint32_t x = 0; x < 7; ++x)
+                    stencil.velocity[geometry::cell_index(stencil.density, x, y, z)] =
+                        {x * 0.25f, y * 0.5f, z * -0.125f, 0};
+        run(c, "divergence stencil", stencil, 1, 0);
         auto thin = simulation::initial_conditions({1, 5, 7}, {}, 0.25f);
         thin.density.values[2] = 1;
         run(c, "singleton and variable velocity", thin, 9, 0.1f);

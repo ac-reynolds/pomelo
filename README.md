@@ -1,6 +1,6 @@
 # Pomelo
 
-A C++20 application using SDL3, Vulkan, and Dear ImGui. A compute shader advects a passive density field while also advecting velocity through itself, and a full-screen ray marcher renders the resulting volume. Collapsible simulation and rendering panels overlay the viewport, with a one-line status bar below.
+A C++20 application using SDL3, Vulkan, and Dear ImGui. A compute shader advects a passive density field while also advecting velocity through itself, and a full-screen ray marcher renders velocity divergence. Collapsible simulation and rendering panels overlay the viewport, with a one-line status bar below.
 
 ## Prerequisites
 
@@ -45,22 +45,21 @@ where you leave it; there is no automatic rotation or panning.
 
 The default domain has 64³ cell-centered samples, with density increasing linearly from 0 to 1 along x.
 Density uses two R32 float 3D images; velocity uses two RGBA32 float 3D
-image. Velocity points along x, with speed increasing linearly from 0 at the first
-y sample to 0.5 world units per second at the last. This divergence-free shear
-moves each y slice at a different speed. Both ramps span sample centers; a
-singleton axis has a zero ramp. Periodic boundaries wrap the density ramp from
-its high end back to its low end. The velocity ramp also has a periodic seam
-across y, with no flow through that seam.
+images. The initial velocity is a crossed periodic flow:
+`v = 0.5 * (sin(2*pi*qy), sin(2*pi*qx), 0)`, where q is normalized cell-center
+position within the domain. Each component makes one cycle across its transverse
+axis. The flow starts divergence-free but develops divergence under advection
+without pressure projection. Density retains its x ramp, including the periodic
+seam at the domain boundary.
 
 Each submitted frame advances one 1/60-second simulation step using backward
-semi-Lagrangian tracing and periodic trilinear interpolation, then renders the
-new density. Simulation speed therefore depends on frame rate. Minimized windows
+semi-Lagrangian tracing and periodic trilinear interpolation, computes divergence
+of the new velocity, then renders that divergence. Simulation speed therefore depends on frame rate. Minimized windows
 pause stepping, and viewport resizing preserves the simulation images.
 
-The default density shears over time. Density does not influence velocity. Buoyancy,
+The default density evolves over time. Density does not influence velocity. Buoyancy,
 pressure projection and density sources are not implemented. Velocity is advected
 using its previous value; without projection, general flows can develop divergence.
-The default shear remains steady under self-advection.
 Initial conditions and speed are defined in `src/graphics/initial_conditions.*`.
 
 Run the numerical and GPU integration tests with:
@@ -98,3 +97,11 @@ focused source files within one library, not separate build targets.
 
 `imgui_core` and SDL remain third-party dependencies. `shaders/` contains HLSL
 sources and shared sampling helpers; `deployment/` contains build helpers.
+
+The single R32 float `divergence` image is recomputed after advection with periodic
+central differences `(v_plus - v_minus) / (2 * spacing)` on each matching component.
+`divergence.comp.hlsl` implements this diagnostic; it does not project velocity.
+The default volume view binds this image. Negative divergence (compression) is
+blue, positive divergence (expansion) orange, and zero is transparent. Opacity
+scales with absolute divergence up to 1 inverse second. The default crossed sinusoidal flow starts at zero divergence and produces
+positive and negative regions after advection.

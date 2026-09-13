@@ -22,11 +22,18 @@ void simulation::create_fields(SimulationFields& fields, VkPhysicalDevice physic
                 initial.velocity.data(), initial.velocity.size() * sizeof(initial.velocity[0]),
                 VK_IMAGE_LAYOUT_GENERAL);
         }
+        gpu::create_image(fields.divergence, physical, device, extent, VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        const std::vector<float> zero(initial.density.values.size(), 0.0f);
+        gpu::upload_image(fields.divergence, physical, device, queue, queue_family, extent,
+            zero.data(), zero.size() * sizeof(float), VK_IMAGE_LAYOUT_GENERAL);
     } catch (...) { destroy_fields(fields, device); throw; }
 }
 void simulation::destroy_fields(SimulationFields& fields, VkDevice device) {
     for (auto& image : fields.density) gpu::destroy_image(image, device);
     for (auto& image : fields.velocity) gpu::destroy_image(image, device);
+    gpu::destroy_image(fields.divergence, device);
     fields = {};
 }
 graphics::FieldView simulation::density_view(const SimulationFields& fields, uint32_t index, uint64_t version) {
@@ -40,4 +47,7 @@ graphics::FieldView simulation::velocity_view(const SimulationFields& fields, ui
 }
 graphics::FieldView simulation::current_velocity(const SimulationFields& fields) {
     return velocity_view(fields, fields.submitted_steps % 2, fields.submitted_steps);
+}
+graphics::FieldView simulation::divergence_view(const SimulationFields& fields, uint64_t version) {
+    return {fields.divergence, VK_FORMAT_R32_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, fields.domain, version};
 }

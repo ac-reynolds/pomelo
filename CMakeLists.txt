@@ -72,6 +72,7 @@ add_library(graphics STATIC
     src/graphics/render_target.cpp
     src/graphics/fields.cpp
     src/graphics/image.cpp
+    src/graphics/divergence.cpp
     src/graphics/advection.cpp
     src/graphics/initial_conditions.cpp
     src/graphics/uniform_grid.cpp
@@ -94,6 +95,20 @@ add_custom_command(OUTPUT ${advect_spirv} ${advect_source}
     VERBATIM
 )
 target_sources(graphics PRIVATE ${advect_source})
+set(divergence_spirv ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/divergence_comp.spv)
+set(divergence_source ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/divergence_comp.cpp)
+add_custom_command(OUTPUT ${divergence_spirv} ${divergence_source}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>
+    COMMAND "${POMELO_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.2
+            -HV 2021 -T cs_6_0 -E main $<IF:$<CONFIG:Debug>,-Od,-O3>
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/divergence.comp.hlsl -Fo ${divergence_spirv}
+    COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/deployment/embed_spirv.py
+            ${divergence_spirv} ${divergence_source} --symbol divergence_comp_spirv --header graphics/shaders.hpp
+    DEPENDS shaders/divergence.comp.hlsl shaders/volume_sampling.hlsli
+            "${POMELO_DXC_EXECUTABLE}" deployment/embed_spirv.py
+    VERBATIM
+)
+target_sources(graphics PRIVATE ${divergence_source})
 foreach(stage vert frag)
     if(stage STREQUAL "vert")
         set(profile vs_6_0)

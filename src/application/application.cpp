@@ -44,8 +44,8 @@ int application::run() {
                                                 2 * std::numbers::pi_v<float>);
                     camera.pitch = std::clamp(camera.pitch + viewport.orbit_dy * sensitivity, -1.5f, 1.5f);
                     if (texture) {
-                        const auto density = graphics.step_simulation(frame);
-                        graphics.render_volume(frame, density, camera);
+                        const auto divergence = graphics.step_simulation(frame);
+                        graphics.render_volume(frame, divergence, camera);
                     }
                     graphics.render_imgui(draw_data.native, frame);
                     graphics.end_frame(frame);

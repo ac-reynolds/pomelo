@@ -18,13 +18,14 @@ struct VolumePipeline {
 struct VolumeView {
     const VolumePipeline* pipeline{};
     FieldView field;
+    bool signed_values{};
     VkDescriptorPool pool{};
     VkDescriptorSet set{};
 };
 
 void create_volume_pipeline(VolumePipeline&, VkPhysicalDevice, VkDevice);
 void destroy_volume_pipeline(VolumePipeline&, VkDevice);
-void create_volume_view(VolumeView&, VkDevice, const VolumePipeline&, const FieldView&);
+void create_volume_view(VolumeView&, VkDevice, const VolumePipeline&, const FieldView&, bool signed_values = false);
 void destroy_volume_view(VolumeView&, VkDevice);
 // Caller waits for GPU completion before destroying resources.
 void record_volume_view(const VolumeView&, const RenderTarget&, VkCommandBuffer, const OrbitCamera&);
