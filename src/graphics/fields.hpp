@@ -5,7 +5,7 @@
 namespace simulation {
 struct SimulationFields {
     std::array<gpu::Image, 2> density;
-    gpu::Image velocity;
+    std::array<gpu::Image, 2> velocity;
     graphics::FieldDomain domain;
     uint64_t submitted_steps{};
 };
@@ -13,5 +13,6 @@ void create_fields(SimulationFields&, VkPhysicalDevice, VkDevice, VkQueue, uint3
 void destroy_fields(SimulationFields&, VkDevice);
 graphics::FieldView density_view(const SimulationFields&, uint32_t index, uint64_t version);
 graphics::FieldView current_density(const SimulationFields&);
-graphics::FieldView velocity_view(const SimulationFields&);
+graphics::FieldView velocity_view(const SimulationFields&, uint32_t index, uint64_t version);
+graphics::FieldView current_velocity(const SimulationFields&);
 }

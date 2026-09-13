@@ -1,6 +1,6 @@
 # Pomelo
 
-A C++20 application using SDL3, Vulkan, and Dear ImGui. A compute shader advects a passive density field through a fixed velocity field, and a full-screen ray marcher renders the resulting volume. Collapsible simulation and rendering panels overlay the viewport, with a one-line status bar below.
+A C++20 application using SDL3, Vulkan, and Dear ImGui. A compute shader advects a passive density field while also advecting velocity through itself, and a full-screen ray marcher renders the resulting volume. Collapsible simulation and rendering panels overlay the viewport, with a one-line status bar below.
 
 ## Prerequisites
 
@@ -44,7 +44,7 @@ where you leave it; there is no automatic rotation or panning.
 ## Simulation
 
 The default domain has 24³ cell-centered samples, with density increasing linearly from 0 to 1 along x.
-Density uses two R32 float 3D images; the fixed velocity uses one RGBA32 float 3D
+Density uses two R32 float 3D images; velocity uses two RGBA32 float 3D
 image. Velocity points along x, with speed increasing linearly from 0 at the first
 y sample to 0.5 world units per second at the last. This divergence-free shear
 moves each y slice at a different speed. Both ramps span sample centers; a
@@ -58,7 +58,9 @@ new density. Simulation speed therefore depends on frame rate. Minimized windows
 pause stepping, and viewport resizing preserves the simulation images.
 
 The default density shears over time. Density does not influence velocity. Buoyancy,
-pressure projection, velocity evolution, and density sources are not implemented.
+pressure projection and density sources are not implemented. Velocity is advected
+using its previous value; without projection, general flows can develop divergence.
+The default shear remains steady under self-advection.
 Initial conditions and speed are defined in `src/graphics/initial_conditions.*`.
 
 Run the numerical and GPU integration tests with:
@@ -70,7 +72,7 @@ ctest --test-dir build --output-on-failure
 The advection test uses a graphics/compute Vulkan device (a software Vulkan driver
 also works) and automatically enables synchronization validation when the Khronos
 validation layer is available. It checks uniform preservation, periodic transport,
-CPU/GPU agreement, immutable velocity, renderer image selection, and two frames in
+CPU/GPU agreement, velocity self-advection, renderer image selection, and two frames in
 flight with offscreen target resizing. GPU readback is restricted to tests.
 
 ## Source layout

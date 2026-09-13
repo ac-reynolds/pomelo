@@ -221,12 +221,13 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
     try {
         simulation::create_fields(fields, c.physical, c.device, c.queue, c.family, initial);
         const std::array views{simulation::density_view(fields, 0, 0), simulation::density_view(fields, 1, 0)};
-        simulation::create_advection(sim, c.physical, c.device, views, simulation::velocity_view(fields));
+        simulation::create_advection(sim, c.physical, c.device, views, {simulation::velocity_view(fields, 0, 0), simulation::velocity_view(fields, 1, 0)});
         graphics::create_volume_pipeline(pipeline, c.physical, c.device);
         for (size_t i = 0; i < views.size(); ++i)
             graphics::create_volume_view(volume_views[i], c.device, pipeline, views[i]);
         for (auto& slot : c.slots) graphics::create_render_target(slot.target, {pipeline.render_pass, pipeline.color_format, pipeline.depth_format}, c.physical, c.device, {16, 16});
         auto expected = initial.density.values;
+        auto reference_state = initial;
         for (unsigned i = 0; i < steps; ++i) {
             auto& slot = c.slots[i % 2]; begin(c, slot);
             // Recreate only the retired target while another frame can still be in flight.
@@ -239,6 +240,8 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             require(fields.submitted_steps == i, "Recording committed simulation state prematurely");
             const auto output = step.output;
             require(output.image.view == fields.density[(i + 1) % 2].view, "Wrong output parity");
+            require(step.velocity_output.image.view == fields.velocity[(i + 1) % 2].view &&
+                    step.velocity_output.version == step.output.version, "Velocity parity/version mismatch");
             graphics::record_volume_view(volume_views[(i + 1) % 2], slot.target, slot.command, {});
             submit(c, slot); simulation::commit_step(fields, step);
             if (i == 0) {
@@ -247,7 +250,17 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
                 catch (const std::logic_error&) { rejected = true; }
                 require(rejected, "Committed the same field version twice");
             }
-            expected = reference(initial, expected, dt);
+            expected = reference(reference_state, expected, dt);
+            auto next_velocity = reference_state.velocity;
+            for (size_t component = 0; component < 3; ++component) {
+                std::vector<float> values(expected.size());
+                for (size_t cell = 0; cell < values.size(); ++cell)
+                    values[cell] = reference_state.velocity[cell][component];
+                const auto advected = reference(reference_state, values, dt);
+                for (size_t cell = 0; cell < values.size(); ++cell)
+                    next_velocity[cell][component] = advected[cell];
+            }
+            reference_state.velocity = std::move(next_velocity);
         }
         const VkExtent3D extent{fields.domain.dimensions[0], fields.domain.dimensions[1], fields.domain.dimensions[2]};
         auto actual = read_image(c, fields.density[fields.submitted_steps % 2], extent, 1, VK_IMAGE_LAYOUT_GENERAL);
@@ -270,8 +283,19 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
                 require(std::abs(actual[x] - initial.density.values[x]) < 1e-6f,
                         "Zero-velocity row moved");
         }
-        auto velocity = read_image(c, fields.velocity, extent, 4, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        require(std::memcmp(velocity.data(), initial.velocity.data(), velocity.size()*sizeof(float)) == 0, "Velocity changed");
+        auto velocity = read_image(c, fields.velocity[fields.submitted_steps % 2], extent, 4, VK_IMAGE_LAYOUT_GENERAL);
+        float velocity_error = 0, velocity_change = 0;
+        for (size_t cell = 0; cell < expected.size(); ++cell) {
+            for (size_t component = 0; component < 4; ++component) {
+                const float value = velocity[4 * cell + component];
+                require(std::isfinite(value), "Nonfinite velocity");
+                velocity_error = std::max(velocity_error, std::abs(value - reference_state.velocity[cell][component]));
+                velocity_change = std::max(velocity_change, std::abs(value - initial.velocity[cell][component]));
+            }
+        }
+        require(velocity_error < tolerance, "Advected velocity differs from CPU reference");
+        if (std::strcmp(name, "velocity self-advection") == 0)
+            require(velocity_change > 0.01f, "Velocity self-advection did not evolve the field");
         if (std::strcmp(name, "integer periodic shift") == 0) {
             // Both renderer descriptors must actually select their respective images.
             // A stale or hard-coded descriptor would produce identical pixels here.
@@ -290,7 +314,7 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
         }
         const double mass = std::accumulate(actual.begin(), actual.end(), 0.0);
         const double initial_mass = std::accumulate(initial.density.values.begin(), initial.density.values.end(), 0.0);
-        std::printf("%s: %u steps, max error %.3g, mass drift %.3g\n", name, steps, error, mass-initial_mass);
+        std::printf("%s: %u steps, max error %.3g, mass drift %.3g, velocity error %.3g\n", name, steps, error, mass-initial_mass, velocity_error);
         cleanup();
     } catch (...) { cleanup(); throw; }
 }
@@ -328,6 +352,17 @@ int main() {
                 }
         for (auto& v : smooth.velocity) v = {0.3f, -0.7f, 0.2f, 0};
         run(c, "smooth localized transport", smooth, 13, 0.25f);
+        auto evolving = simulation::initial_conditions({9, 7, 5}, {}, 0.25f);
+        for (uint32_t z = 0; z < 5; ++z)
+            for (uint32_t y = 0; y < 7; ++y)
+                for (uint32_t x = 0; x < 9; ++x) {
+                    // Initially divergence-free periodic flow with nonzero self-advection.
+                    const auto cell = geometry::cell_index(evolving.density, x, y, z);
+                    evolving.velocity[cell] = {float(0.3 * std::sin(6.283185307 * y / 7)),
+                        float(0.2 * std::cos(6.283185307 * z / 5)),
+                        float(-0.4 * std::sin(6.283185307 * x / 9)), 0};
+                }
+        run(c, "velocity self-advection", evolving, 17, 0.1f);
         auto thin = simulation::initial_conditions({1, 5, 7}, {}, 0.25f);
         thin.density.values[2] = 1;
         run(c, "singleton and variable velocity", thin, 9, 0.1f);

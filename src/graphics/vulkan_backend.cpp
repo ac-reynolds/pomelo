@@ -405,7 +405,7 @@ graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::In
         auto& vk = impl_->vk;
         simulation::create_fields(vk.fields, vk.physical_device, vk.device, vk.queue, vk.queue_family, initial);
         const std::array fields{simulation::density_view(vk.fields, 0, 0), simulation::density_view(vk.fields, 1, 0)};
-        simulation::create_advection(vk.simulation, vk.physical_device, vk.device, fields, simulation::velocity_view(vk.fields));
+        simulation::create_advection(vk.simulation, vk.physical_device, vk.device, fields, {simulation::velocity_view(vk.fields, 0, 0), simulation::velocity_view(vk.fields, 1, 0)});
         create_volume_pipeline(vk.volume_pipeline, vk.physical_device, vk.device);
         for (size_t i = 0; i < fields.size(); ++i)
             create_volume_view(vk.volume_views[i], vk.device, vk.volume_pipeline, fields[i]);
