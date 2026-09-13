@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics/camera.hpp"
 
 // Internal graphics resources. The Vulkan backend owns their lifetime and waits
 // for GPU completion before calling the destruction functions.
@@ -37,6 +38,6 @@ void create_scene_target(SceneTarget& target, const SceneResources& scene,
                          VkPhysicalDevice physical_device, VkDevice device, VkExtent2D extent);
 void destroy_scene_target(SceneTarget& target, VkDevice device);
 void record_scene(const SceneResources& scene, const SceneTarget& target,
-                  VkCommandBuffer command_buffer, double elapsed_seconds, uint32_t density_index);
+                  VkCommandBuffer command_buffer, const OrbitCamera& camera, uint32_t density_index);
 
 } // namespace graphics

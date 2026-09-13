@@ -17,13 +17,23 @@ chrome::ViewportState chrome::draw_viewport(Bounds bounds, TextureHandle texture
     const bool visible = ImGui::Begin("##viewport", nullptr, flags);
     ImGui::PopStyleVar(3);
     const ImVec2 content = ImGui::GetContentRegionAvail();
-    if (visible && content.x > 0 && content.y > 0 && texture.native)
-        ImGui::Image(static_cast<ImTextureID>(texture.native), content);
+    ImVec2 orbit_delta{};
+    if (visible && content.x > 0 && content.y > 0) {
+        const ImVec2 position = ImGui::GetCursorScreenPos();
+        if (texture.native) ImGui::Image(static_cast<ImTextureID>(texture.native), content);
+        ImGui::SetCursorScreenPos(position);
+        // An active item keeps ownership of a drag after it leaves the viewport,
+        // while clicks originating on overlaid panels cannot start an orbit.
+        ImGui::InvisibleButton("orbit", content, ImGuiButtonFlags_MouseButtonLeft);
+        if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+            !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            orbit_delta = ImGui::GetIO().MouseDelta;
+    }
     const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
     const ViewportState state{
         visible ? std::max(0, static_cast<int>(std::ceil(content.x * scale.x))) : 0,
         visible ? std::max(0, static_cast<int>(std::ceil(content.y * scale.y))) : 0,
-        ImGui::IsWindowHovered(), ImGui::IsWindowFocused()};
+        ImGui::IsWindowHovered(), ImGui::IsWindowFocused(), orbit_delta.x, orbit_delta.y};
     ImGui::End();
     return state;
 }

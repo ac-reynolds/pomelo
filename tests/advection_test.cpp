@@ -228,7 +228,7 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             }
             uint32_t output = simulation::record_advection(sim, slot.command, dt);
             require(output == (i + 1) % 2, "Wrong output parity");
-            graphics::record_scene(scene, slot.target, slot.command, 0, output);
+            graphics::record_scene(scene, slot.target, slot.command, {}, output);
             submit(c, slot); ++sim.submitted_steps;
             expected = reference(initial, expected, dt);
         }
@@ -261,7 +261,7 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             std::array<std::vector<float>, 2> pixels;
             for (uint32_t image = 0; image < 2; ++image) {
                 auto& slot = c.slots[0]; begin(c, slot);
-                graphics::record_scene(scene, slot.target, slot.command, 0, image);
+                graphics::record_scene(scene, slot.target, slot.command, {}, image);
                 submit(c, slot);
                 pixels[image] = read_image(c, slot.target.color,
                     {slot.target.extent.width, slot.target.extent.height, 1}, 1,

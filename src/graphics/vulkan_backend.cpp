@@ -445,13 +445,13 @@ std::uint64_t graphics::VulkanBackend::prepare_scene(Frame token, int width, int
     return reinterpret_cast<std::uintptr_t>(frame.texture);
 }
 
-void graphics::VulkanBackend::render_scene(Frame token, double elapsed_seconds) {
+void graphics::VulkanBackend::render_scene(Frame token, const OrbitCamera& camera) {
     auto& vk = impl_->vk;
     const auto& frame = vk.frames[token.frame_index];
     if (vk.step_recorded) throw std::logic_error("Simulation already recorded for this frame");
     if (frame.target.framebuffer) {
         const auto destination = simulation::record_advection(vk.simulation, frame.command_buffer);
-        record_scene(vk.scene, frame.target, frame.command_buffer, elapsed_seconds, destination);
+        record_scene(vk.scene, frame.target, frame.command_buffer, camera, destination);
         vk.step_recorded = true;
     }
 }

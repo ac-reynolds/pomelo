@@ -250,15 +250,15 @@ void graphics::destroy_scene_target(SceneTarget& target, VkDevice device) {
 }
 
 void graphics::record_scene(const SceneResources& scene, const SceneTarget& target,
-                           VkCommandBuffer command_buffer, double elapsed_seconds, uint32_t density_index) {
-    const float angle = static_cast<float>(std::fmod(elapsed_seconds * 0.7, 6.283185307179586));
+                           VkCommandBuffer command_buffer, const OrbitCamera& camera, uint32_t density_index) {
+    const float angle = camera.yaw;
     const float c = std::cos(angle), s = std::sin(angle);
-    const float tilt = -0.35f, ct = std::cos(tilt), st = std::sin(tilt);
+    const float tilt = camera.pitch, ct = std::cos(tilt), st = std::sin(tilt);
     const float aspect = static_cast<float>(target.extent.width) / target.extent.height;
     const float tangent = std::tan(0.785398163f * 0.5f);
     const float half_fov = std::atan(tangent * std::fmin(aspect, 1.0f));
     const float distance = 1.1f * scene.radius / std::sin(half_fov);
-    // Inverse of the previous view rotation, with rays expressed in grid space.
+    // Orbit basis, with rays expressed in grid space.
     const std::array<float, 3> right{c, 0, s};
     const std::array<float, 3> up{s * st, ct, -c * st};
     const std::array<float, 3> back{-s * ct, st, c * ct};

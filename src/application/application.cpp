@@ -4,7 +4,9 @@
 #include "graphics/vulkan_backend.hpp"
 #include "simulation/initial_conditions.hpp"
 
-#include <chrono>
+#include <algorithm>
+#include <cmath>
+#include <numbers>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -20,7 +22,7 @@ int application::run() {
                 const auto initial = simulation::initial_conditions();
                 graphics::VulkanBackend graphics(window.native_window(), initial);
                 chrome::ViewportState viewport{1, 1, false, false};
-                const auto start = std::chrono::steady_clock::now();
+                graphics::OrbitCamera camera;
                 bool running = true;
                 while (running) {
                     running = window.poll_events();
@@ -37,8 +39,11 @@ int application::run() {
                     chrome.begin_frame();
                     viewport = chrome.draw_layout({texture});
                     const chrome::DrawData draw_data = chrome.finalize_frame();
-                    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-                    if (texture) graphics.render_scene(frame, elapsed);
+                    constexpr float sensitivity = 0.005f; // Radians per logical screen pixel.
+                    camera.yaw = std::remainder(camera.yaw + viewport.orbit_dx * sensitivity,
+                                                2 * std::numbers::pi_v<float>);
+                    camera.pitch = std::clamp(camera.pitch + viewport.orbit_dy * sensitivity, -1.5f, 1.5f);
+                    if (texture) graphics.render_scene(frame, camera);
                     graphics.render_imgui(draw_data.native, frame);
                     graphics.end_frame(frame);
                 }

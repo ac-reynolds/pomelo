@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics/camera.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -42,7 +43,7 @@ public:
     void begin_imgui_frame();
     [[nodiscard]] Frame begin_frame();
     [[nodiscard]] std::uint64_t prepare_scene(Frame frame, int width, int height);
-    void render_scene(Frame frame, double elapsed_seconds);
+    void render_scene(Frame frame, const OrbitCamera& camera);
     void render_imgui(void* draw_data, Frame frame);
     void end_frame(Frame frame);
     void wait_idle();

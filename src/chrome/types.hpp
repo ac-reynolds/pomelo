@@ -11,5 +11,7 @@ struct ViewportState {
     int height{};
     bool hovered{};
     bool focused{};
+    float orbit_dx{};
+    float orbit_dy{};
 };
 } // namespace chrome
