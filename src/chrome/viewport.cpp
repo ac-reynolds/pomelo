@@ -12,7 +12,8 @@ chrome::ViewportState chrome::draw_viewport(Bounds bounds, TextureHandle texture
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
     constexpr auto flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoBringToFrontOnFocus;
     const bool visible = ImGui::Begin("##viewport", nullptr, flags);
     ImGui::PopStyleVar(3);
     const ImVec2 content = ImGui::GetContentRegionAvail();

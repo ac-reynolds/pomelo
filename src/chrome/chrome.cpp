@@ -28,7 +28,7 @@ chrome::ViewportState chrome::Chrome::draw_layout(TextureHandle viewport_texture
     if (area.x <= 0 || area.y <= 0) return {};
     const float footer = std::min(footer_height(), area.y);
     const float body = std::max(0.0f, area.y - footer);
-    const float rail = ImGui::GetFrameHeight() + 4;
+    const float rail = std::min(ImGui::GetFrameHeight() + 4, area.x / 3);
     float left = simulation_.expanded ? std::clamp(area.x * 0.20f, 180.0f, 320.0f) : rail;
     float right = rendering_.expanded ? std::clamp(area.x * 0.24f, 220.0f, 380.0f) : rail;
     // Reserve viewport space, then shrink the expanded portions of the panels.
@@ -40,12 +40,14 @@ chrome::ViewportState chrome::Chrome::draw_layout(TextureHandle viewport_texture
         left = minimum + (left - minimum) * factor;
         right = minimum + (right - minimum) * factor;
     }
+    // Expanded panels overlay the same image instead of resizing or recentering it.
+    // Submit the viewport first so newly created panels appear above it.
+    const auto state = draw_viewport({origin.x + rail, origin.y,
+                                     std::max(0.0f, area.x - 2 * rail), body}, viewport_texture);
     if (body > 0) {
         draw_simulation({origin.x, origin.y, left, body}, simulation_);
         draw_rendering({origin.x + area.x - right, origin.y, right, body}, rendering_);
     }
-    const auto state = draw_viewport({origin.x + left, origin.y,
-                                     std::max(0.0f, area.x - left - right), body}, viewport_texture);
     draw_footer({origin.x, origin.y + body, area.x, footer}, status);
     return state;
 }
