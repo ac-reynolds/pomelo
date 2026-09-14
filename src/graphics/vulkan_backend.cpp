@@ -61,6 +61,7 @@ struct VulkanContext {
     uint32_t frame_index{};
     graphics::VolumePipeline volume_pipeline;
     graphics::VolumeView volume_view;
+    std::array<graphics::VolumeView, 2> density_views;
     simulation::Divergence divergence;
     simulation::SimulationFields fields;
     simulation::AdvectionStep pending_step;
@@ -380,6 +381,7 @@ struct VulkanContext {
             vkDeviceWaitIdle(device);
             destroy_swapchain();
             graphics::destroy_volume_view(volume_view, device);
+            for (auto& view : density_views) graphics::destroy_volume_view(view, device);
             simulation::destroy_divergence(divergence, device);
             graphics::destroy_volume_pipeline(volume_pipeline, device);
             simulation::destroy_advection(simulation, device);
@@ -414,6 +416,8 @@ graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::In
         simulation::create_divergence(vk.divergence, vk.physical_device, vk.device,
             {simulation::velocity_view(vk.fields, 0, 0), simulation::velocity_view(vk.fields, 1, 0)}, divergence);
         create_volume_view(vk.volume_view, vk.device, vk.volume_pipeline, divergence, true);
+        for (size_t i = 0; i < fields.size(); ++i)
+            create_volume_view(vk.density_views[i], vk.device, vk.volume_pipeline, fields[i]);
     } catch (...) {
         impl_->vk.destroy();
         throw;
@@ -458,21 +462,29 @@ std::uint64_t graphics::VulkanBackend::prepare_viewport(Frame token, int width, 
     return reinterpret_cast<std::uintptr_t>(frame.texture);
 }
 
-graphics::FieldView graphics::VulkanBackend::step_simulation(Frame token) {
+graphics::SimulationOutput graphics::VulkanBackend::step_simulation(Frame token) {
     auto& vk = impl_->vk;
     if (vk.step_recorded) throw std::logic_error("Simulation already recorded for this frame");
     vk.pending_step = simulation::prepare_advection(vk.fields);
     simulation::record_advection(vk.simulation, vk.frames[token.frame_index].command_buffer, vk.pending_step);
     simulation::record_divergence(vk.divergence, vk.frames[token.frame_index].command_buffer, vk.pending_step.velocity_output);
     vk.step_recorded = true;
-    return simulation::divergence_view(vk.fields, vk.pending_step.output.version);
+    return {vk.pending_step.output, simulation::divergence_view(vk.fields, vk.pending_step.output.version)};
 }
 
 void graphics::VulkanBackend::render_volume(Frame token, const FieldView& field, const OrbitCamera& camera) {
     const auto& vk = impl_->vk;
     const auto& frame = vk.frames[token.frame_index];
     if (!frame.target.framebuffer) return;
-    if (!same_field_binding(vk.volume_view.field, field))
-        throw std::invalid_argument("No volume view configured for the selected field");
-    record_volume_view(vk.volume_view, frame.target, frame.command_buffer, camera);
+    if (same_field_binding(vk.volume_view.field, field)) {
+        record_volume_view(vk.volume_view, frame.target, frame.command_buffer, camera);
+        return;
+    }
+    for (const auto& view : vk.density_views) {
+        if (same_field_binding(view.field, field)) {
+            record_volume_view(view, frame.target, frame.command_buffer, camera);
+            return;
+        }
+    }
+    throw std::invalid_argument("No volume view configured for the selected field");
 }

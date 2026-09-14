@@ -46,7 +46,7 @@ chrome::ViewportState chrome::Chrome::draw_layout(TextureHandle viewport_texture
                                      std::max(0.0f, area.x - 2 * rail), body}, viewport_texture);
     if (body > 0) {
         draw_simulation({origin.x, origin.y, left, body}, simulation_);
-        draw_rendering({origin.x + area.x - right, origin.y, right, body}, rendering_);
+        draw_rendering({origin.x + area.x - right, origin.y, right, body}, rendering_, display_field_);
     }
     draw_footer({origin.x, origin.y + body, area.x, footer}, status);
     return state;

@@ -101,7 +101,8 @@ sources and shared sampling helpers; `deployment/` contains build helpers.
 The single R32 float `divergence` image is recomputed after advection with periodic
 central differences `(v_plus - v_minus) / (2 * spacing)` on each matching component.
 `divergence.comp.hlsl` implements this diagnostic; it does not project velocity.
-The default volume view binds this image. Negative divergence (compression) is
+The rendering panel selects Density or Divergence using radio buttons, with
+Divergence selected initially. Switching views preserves simulation and camera state. Negative divergence (compression) is
 blue, positive divergence (expansion) orange, and zero is transparent. Opacity
 scales with absolute divergence up to 1 inverse second. The default crossed sinusoidal flow starts at zero divergence and produces
 positive and negative regions after advection.
