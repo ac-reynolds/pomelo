@@ -2,6 +2,7 @@
 #include "graphics/volume_view.hpp"
 #include "graphics/advection.hpp"
 #include "graphics/divergence.hpp"
+#include "graphics/pressure.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -60,7 +61,10 @@ struct VulkanContext {
     std::vector<PresentImage> present_images;
     uint32_t frame_index{};
     graphics::VolumePipeline volume_pipeline;
-    graphics::VolumeView volume_view;
+    std::array<graphics::VolumeView, 2> pressure_views;
+    simulation::PressureSolve pressure;
+    std::array<bool, 2> pressure_submitted{};
+    std::string pressure_status{"Ready"};
     std::array<graphics::VolumeView, 2> density_views;
     simulation::Divergence divergence;
     simulation::SimulationFields fields;
@@ -321,6 +325,15 @@ struct VulkanContext {
         if (!swapchain || extent.width == 0 || extent.height == 0) return {};
         Frame& frame = frames[frame_index];
         vk_check(vkWaitForFences(device, 1, &frame.fence, VK_TRUE, UINT64_MAX));
+        if (pressure_submitted[frame_index]) {
+            const auto diagnostics = simulation::read_pressure_diagnostics(pressure, device, frame_index);
+            if (!diagnostics.finite) pressure_status = "Pressure solve produced nonfinite values";
+            else if (!simulation::pressure_converged(diagnostics)) {
+                pressure_status = "Pressure iteration budget exhausted: residual " + std::to_string(diagnostics.residual_rms)
+                    + ", RHS " + std::to_string(diagnostics.rhs_rms);
+            } else pressure_status = "Ready";
+            pressure_submitted[frame_index] = false;
+        }
         uint32_t image_index = 0;
         VkResult acquire = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
                                                 frame.image_acquired, VK_NULL_HANDLE, &image_index);
@@ -362,7 +375,10 @@ struct VulkanContext {
         submit.pSignalSemaphores = &image.render_complete;
         vk_check(vkResetFences(device, 1, &frame.fence));
         vk_check(vkQueueSubmit(queue, 1, &submit, frame.fence));
-        if (step_recorded) simulation::commit_step(fields, pending_step);
+        if (step_recorded) {
+            simulation::commit_step(fields, pending_step);
+            pressure_submitted[token.frame_index] = true;
+        }
         step_recorded = false;
         VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
         present.waitSemaphoreCount = 1;
@@ -380,7 +396,8 @@ struct VulkanContext {
         if (device) {
             vkDeviceWaitIdle(device);
             destroy_swapchain();
-            graphics::destroy_volume_view(volume_view, device);
+            for (auto& view : pressure_views) graphics::destroy_volume_view(view, device);
+            simulation::destroy_pressure(pressure, device);
             for (auto& view : density_views) graphics::destroy_volume_view(view, device);
             simulation::destroy_divergence(divergence, device);
             graphics::destroy_volume_pipeline(volume_pipeline, device);
@@ -415,7 +432,10 @@ graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::In
         const auto divergence = simulation::divergence_view(vk.fields, 0);
         simulation::create_divergence(vk.divergence, vk.physical_device, vk.device,
             {simulation::velocity_view(vk.fields, 0, 0), simulation::velocity_view(vk.fields, 1, 0)}, divergence);
-        create_volume_view(vk.volume_view, vk.device, vk.volume_pipeline, divergence, true);
+        const std::array pressure_fields{simulation::pressure_view(vk.fields, 0, 0), simulation::pressure_view(vk.fields, 1, 0)};
+        simulation::create_pressure(vk.pressure, vk.physical_device, vk.device, divergence, pressure_fields, vk.frames.size());
+        for (size_t i = 0; i < pressure_fields.size(); ++i)
+            create_volume_view(vk.pressure_views[i], vk.device, vk.volume_pipeline, pressure_fields[i], true, 0.25f);
         for (size_t i = 0; i < fields.size(); ++i)
             create_volume_view(vk.density_views[i], vk.device, vk.volume_pipeline, fields[i]);
     } catch (...) {
@@ -468,17 +488,21 @@ graphics::SimulationOutput graphics::VulkanBackend::step_simulation(Frame token)
     vk.pending_step = simulation::prepare_advection(vk.fields);
     simulation::record_advection(vk.simulation, vk.frames[token.frame_index].command_buffer, vk.pending_step);
     simulation::record_divergence(vk.divergence, vk.frames[token.frame_index].command_buffer, vk.pending_step.velocity_output);
+    const auto pressure = simulation::record_pressure(vk.pressure, vk.frames[token.frame_index].command_buffer,
+        vk.pending_step.dt, vk.pending_step.output.version, token.frame_index);
     vk.step_recorded = true;
-    return {vk.pending_step.output, simulation::divergence_view(vk.fields, vk.pending_step.output.version)};
+    return {vk.pending_step.output, pressure};
 }
 
 void graphics::VulkanBackend::render_volume(Frame token, const FieldView& field, const OrbitCamera& camera) {
     const auto& vk = impl_->vk;
     const auto& frame = vk.frames[token.frame_index];
     if (!frame.target.framebuffer) return;
-    if (same_field_binding(vk.volume_view.field, field)) {
-        record_volume_view(vk.volume_view, frame.target, frame.command_buffer, camera);
-        return;
+    for (const auto& view : vk.pressure_views) {
+        if (same_field_binding(view.field, field)) {
+            record_volume_view(view, frame.target, frame.command_buffer, camera);
+            return;
+        }
     }
     for (const auto& view : vk.density_views) {
         if (same_field_binding(view.field, field)) {
@@ -487,4 +511,8 @@ void graphics::VulkanBackend::render_volume(Frame token, const FieldView& field,
         }
     }
     throw std::invalid_argument("No volume view configured for the selected field");
+}
+
+std::string_view graphics::VulkanBackend::simulation_status() const {
+    return impl_->vk.pressure_status;
 }

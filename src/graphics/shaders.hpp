@@ -14,3 +14,15 @@ extern const std::size_t advect_comp_spirv_size;
 
 extern const std::uint32_t divergence_comp_spirv[];
 extern const std::size_t divergence_comp_spirv_size;
+
+extern const std::uint32_t pressure_comp_spirv[];
+extern const std::size_t pressure_comp_spirv_size;
+
+extern const std::uint32_t pressure_reduce_comp_spirv[];
+extern const std::size_t pressure_reduce_comp_spirv_size;
+
+extern const std::uint32_t pressure_statistics_comp_spirv[];
+extern const std::size_t pressure_statistics_comp_spirv_size;
+
+extern const std::uint32_t pressure_normalize_comp_spirv[];
+extern const std::size_t pressure_normalize_comp_spirv_size;

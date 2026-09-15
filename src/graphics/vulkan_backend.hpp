@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string_view>
 
 namespace simulation { struct InitialConditions; }
 
@@ -22,7 +23,7 @@ struct BackendInfo {
     std::uint32_t image_count{};
 };
 
-struct SimulationOutput { FieldView density, divergence; };
+struct SimulationOutput { FieldView density, pressure; };
 
 struct Frame {
     void* command_buffer{};
@@ -44,6 +45,7 @@ public:
 
     [[nodiscard]] BackendInfo backend_info() const;
     void begin_imgui_frame();
+    [[nodiscard]] std::string_view simulation_status() const;
     [[nodiscard]] Frame begin_frame();
     [[nodiscard]] std::uint64_t prepare_viewport(Frame frame, int width, int height);
     [[nodiscard]] SimulationOutput step_simulation(Frame frame);

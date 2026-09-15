@@ -23,7 +23,7 @@ public:
 private:
     PanelState simulation_;
     PanelState rendering_;
-    DisplayField display_field_{DisplayField::divergence};
+    DisplayField display_field_{DisplayField::pressure};
 };
 
 } // namespace chrome

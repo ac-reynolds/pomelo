@@ -37,7 +37,7 @@ int application::run() {
                     graphics.begin_imgui_frame();
                     window.begin_imgui_frame();
                     chrome.begin_frame();
-                    viewport = chrome.draw_layout({texture});
+                    viewport = chrome.draw_layout({texture}, graphics.simulation_status());
                     const chrome::DrawData draw_data = chrome.finalize_frame();
                     constexpr float sensitivity = 0.005f; // Radians per logical screen pixel.
                     camera.yaw = std::remainder(camera.yaw + viewport.orbit_dx * sensitivity,
@@ -46,7 +46,7 @@ int application::run() {
                     if (texture) {
                         const auto output = graphics.step_simulation(frame);
                         const auto& field = chrome.display_field() == chrome::DisplayField::density
-                            ? output.density : output.divergence;
+                            ? output.density : output.pressure;
                         graphics.render_volume(frame, field, camera);
                     }
                     graphics.render_imgui(draw_data.native, frame);

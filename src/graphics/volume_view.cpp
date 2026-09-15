@@ -179,7 +179,9 @@ void graphics::destroy_volume_pipeline(VolumePipeline& view, VkDevice device) {
 }
 
 void graphics::create_volume_view(VolumeView& view, VkDevice device, const VolumePipeline& pipeline,
-                                  const FieldView& field, bool signed_values) {
+                                  const FieldView& field, bool signed_values, float signed_scale) {
+    if (!std::isfinite(signed_scale) || signed_scale <= 0 || !std::isfinite(1 / signed_scale))
+        throw std::invalid_argument("Invalid signed volume scale");
     if (field.format != VK_FORMAT_R32_SFLOAT || !field.image.view ||
         (field.layout != VK_IMAGE_LAYOUT_GENERAL && field.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
         throw std::invalid_argument("Volume view requires a sampled scalar R32 field");
@@ -187,6 +189,7 @@ void graphics::create_volume_view(VolumeView& view, VkDevice device, const Volum
         view.pipeline = &pipeline;
         view.field = field;
         view.signed_values = signed_values;
+        view.signed_scale = signed_scale;
         VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1};
         VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         pool.maxSets = 1;
@@ -245,7 +248,7 @@ void graphics::record_volume_view(const VolumeView& view, const RenderTarget& ta
     const std::array<float, 3> back{-s * ct, st, c * ct};
     const Transform transform{
         {center[0] + distance * back[0], center[1] + distance * back[1],
-         center[2] + distance * back[2], view.signed_values ? 1.0f : 0.0f},
+         center[2] + distance * back[2], view.signed_values ? 1.0f / view.signed_scale : 0.0f},
         {right[0] * tangent * aspect, right[1] * tangent * aspect, right[2] * tangent * aspect, 0},
         {up[0] * tangent, up[1] * tangent, up[2] * tangent, 0},
         {-back[0], -back[1], -back[2], 0},

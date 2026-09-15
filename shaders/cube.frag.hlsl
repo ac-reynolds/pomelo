@@ -13,9 +13,9 @@ struct Transform {
 
 // RGB emission color and extinction per grid-spacing unit.
 float4 transfer(float value) {
-    if (transform.eye.w > 0.5) {
-        // Divergence in inverse seconds: blue compression, orange expansion.
-        float strength = saturate(abs(value));
+    if (transform.eye.w > 0) {
+        // Signed scalar: blue negative, orange positive; eye.w is inverse display scale.
+        float strength = saturate(abs(value) * transform.eye.w);
         float3 color = value < 0 ? float3(0.1, 0.4, 1.0) : float3(1.0, 0.25, 0.05);
         return float4(color, 0.18 * strength);
     }

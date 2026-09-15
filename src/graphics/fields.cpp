@@ -28,12 +28,20 @@ void simulation::create_fields(SimulationFields& fields, VkPhysicalDevice physic
         const std::vector<float> zero(initial.density.values.size(), 0.0f);
         gpu::upload_image(fields.divergence, physical, device, queue, queue_family, extent,
             zero.data(), zero.size() * sizeof(float), VK_IMAGE_LAYOUT_GENERAL);
+        for (auto& pressure : fields.pressure) {
+            gpu::create_image(pressure, physical, device, extent, VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            gpu::upload_image(pressure, physical, device, queue, queue_family, extent,
+                zero.data(), zero.size() * sizeof(float), VK_IMAGE_LAYOUT_GENERAL);
+        }
     } catch (...) { destroy_fields(fields, device); throw; }
 }
 void simulation::destroy_fields(SimulationFields& fields, VkDevice device) {
     for (auto& image : fields.density) gpu::destroy_image(image, device);
     for (auto& image : fields.velocity) gpu::destroy_image(image, device);
     gpu::destroy_image(fields.divergence, device);
+    for (auto& image : fields.pressure) gpu::destroy_image(image, device);
     fields = {};
 }
 graphics::FieldView simulation::density_view(const SimulationFields& fields, uint32_t index, uint64_t version) {
@@ -50,4 +58,8 @@ graphics::FieldView simulation::current_velocity(const SimulationFields& fields)
 }
 graphics::FieldView simulation::divergence_view(const SimulationFields& fields, uint64_t version) {
     return {fields.divergence, VK_FORMAT_R32_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, fields.domain, version};
+}
+
+graphics::FieldView simulation::pressure_view(const SimulationFields& fields, uint32_t index, uint64_t version) {
+    return {fields.pressure.at(index), VK_FORMAT_R32_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, fields.domain, version};
 }

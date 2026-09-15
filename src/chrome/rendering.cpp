@@ -7,8 +7,8 @@ void chrome::draw_rendering(Bounds bounds, PanelState& state, DisplayField& sele
         ImGui::TextUnformatted("Field");
         if (ImGui::RadioButton("Density", selection == DisplayField::density))
             selection = DisplayField::density;
-        if (ImGui::RadioButton("Divergence", selection == DisplayField::divergence))
-            selection = DisplayField::divergence;
+        if (ImGui::RadioButton("Pressure", selection == DisplayField::pressure))
+            selection = DisplayField::pressure;
     }
     end_panel();
 }

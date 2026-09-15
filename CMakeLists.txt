@@ -72,6 +72,7 @@ add_library(graphics STATIC
     src/graphics/render_target.cpp
     src/graphics/fields.cpp
     src/graphics/image.cpp
+    src/graphics/pressure.cpp
     src/graphics/divergence.cpp
     src/graphics/advection.cpp
     src/graphics/initial_conditions.cpp
@@ -109,6 +110,22 @@ add_custom_command(OUTPUT ${divergence_spirv} ${divergence_source}
     VERBATIM
 )
 target_sources(graphics PRIVATE ${divergence_source})
+foreach(shader pressure pressure_reduce pressure_statistics pressure_normalize)
+    set(spirv ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/${shader}_comp.spv)
+    set(source ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/${shader}_comp.cpp)
+    add_custom_command(OUTPUT ${spirv} ${source}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>
+        COMMAND "${POMELO_DXC_EXECUTABLE}" -spirv -fspv-target-env=vulkan1.2
+                -HV 2021 -T cs_6_0 -E main $<IF:$<CONFIG:Debug>,-Od,-O3>
+                ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${shader}.comp.hlsl -Fo ${spirv}
+        COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/deployment/embed_spirv.py
+                ${spirv} ${source} --symbol ${shader}_comp_spirv --header graphics/shaders.hpp
+        DEPENDS shaders/${shader}.comp.hlsl shaders/pressure_interface.hlsli
+                "${POMELO_DXC_EXECUTABLE}" deployment/embed_spirv.py
+        VERBATIM
+    )
+    target_sources(graphics PRIVATE ${source})
+endforeach()
 foreach(stage vert frag)
     if(stage STREQUAL "vert")
         set(profile vs_6_0)
@@ -171,5 +188,8 @@ if(BUILD_TESTING)
     add_executable(advection_test tests/advection_test.cpp)
     target_link_libraries(advection_test PRIVATE graphics)
     add_test(NAME advection COMMAND advection_test)
-    set_tests_properties(advection PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(pressure_test tests/pressure_test.cpp)
+    target_link_libraries(pressure_test PRIVATE graphics)
+    add_test(NAME pressure COMMAND pressure_test)
+    set_tests_properties(advection pressure PROPERTIES SKIP_RETURN_CODE 77)
 endif()
