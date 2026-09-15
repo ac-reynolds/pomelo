@@ -5,8 +5,10 @@
 namespace simulation {
 struct SimulationFields {
     std::array<gpu::Image, 2> density;
+    // Collocated xyz components. Projection uses a forward pressure gradient
+    // paired with backward divergence; advection still samples at cell centers.
     std::array<gpu::Image, 2> velocity;
-    gpu::Image divergence;
+    gpu::Image divergence; // Pressure RHS during the solve, corrected velocity divergence at step end.
     std::array<gpu::Image, 2> pressure;
     graphics::FieldDomain domain;
     uint64_t submitted_steps{};

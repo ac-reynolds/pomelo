@@ -72,6 +72,7 @@ add_library(graphics STATIC
     src/graphics/render_target.cpp
     src/graphics/fields.cpp
     src/graphics/image.cpp
+    src/graphics/projection.cpp
     src/graphics/pressure.cpp
     src/graphics/divergence.cpp
     src/graphics/advection.cpp
@@ -110,7 +111,7 @@ add_custom_command(OUTPUT ${divergence_spirv} ${divergence_source}
     VERBATIM
 )
 target_sources(graphics PRIVATE ${divergence_source})
-foreach(shader pressure pressure_reduce pressure_statistics pressure_normalize)
+foreach(shader pressure pressure_reduce pressure_statistics pressure_normalize projection)
     set(spirv ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/${shader}_comp.spv)
     set(source ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/${shader}_comp.cpp)
     add_custom_command(OUTPUT ${spirv} ${source}
@@ -191,5 +192,8 @@ if(BUILD_TESTING)
     add_executable(pressure_test tests/pressure_test.cpp)
     target_link_libraries(pressure_test PRIVATE graphics)
     add_test(NAME pressure COMMAND pressure_test)
-    set_tests_properties(advection pressure PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(projection_test tests/projection_test.cpp)
+    target_link_libraries(projection_test PRIVATE graphics)
+    add_test(NAME projection COMMAND projection_test)
+    set_tests_properties(advection pressure projection PROPERTIES SKIP_RETURN_CODE 77)
 endif()

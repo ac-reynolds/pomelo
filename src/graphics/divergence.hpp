@@ -14,6 +14,7 @@ struct Divergence {
 void create_divergence(Divergence&, VkPhysicalDevice, VkDevice,
     const std::array<graphics::FieldView, 2>& velocity, const graphics::FieldView& output);
 void destroy_divergence(Divergence&, VkDevice);
-// Central differences with periodic boundaries; call after advection on the same queue.
+// Backward differences with periodic boundaries, paired with projection's forward gradient.
+// Call after advection for the pressure RHS, and after projection to refresh the field.
 void record_divergence(const Divergence&, VkCommandBuffer, const graphics::FieldView& velocity);
 }

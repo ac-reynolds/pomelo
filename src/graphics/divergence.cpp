@@ -6,14 +6,14 @@
 #include <string>
 namespace {
 void check(VkResult r) { if (r != VK_SUCCESS) throw std::runtime_error("Divergence Vulkan error: " + std::to_string(r)); }
-struct Parameters { std::array<uint32_t, 3> dimensions; float inverse_two_spacing; };
-static_assert(sizeof(Parameters) == 16 && offsetof(Parameters, inverse_two_spacing) == 12);
+struct Parameters { std::array<uint32_t, 3> dimensions; float inverse_spacing; };
+static_assert(sizeof(Parameters) == 16 && offsetof(Parameters, inverse_spacing) == 12);
 }
 void simulation::create_divergence(Divergence& sim, VkPhysicalDevice physical, VkDevice device,
     const std::array<graphics::FieldView, 2>& velocity, const graphics::FieldView& output) {
     const auto& domain = output.domain;
     if (!output.image.view || output.format != VK_FORMAT_R32_SFLOAT || output.layout != VK_IMAGE_LAYOUT_GENERAL ||
-        !std::isfinite(0.5f / domain.spacing) || domain.spacing <= 0)
+        !std::isfinite(1.0f / domain.spacing) || domain.spacing <= 0)
         throw std::invalid_argument("Invalid divergence output field");
     for (const auto& field : velocity)
         if (!field.image.view || field.format != VK_FORMAT_R32G32B32A32_SFLOAT || field.layout != VK_IMAGE_LAYOUT_GENERAL ||
@@ -122,7 +122,7 @@ void simulation::record_divergence(const Divergence& sim, VkCommandBuffer comman
     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, sim.pipeline);
     vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, sim.layout, 0, 1, &sim.sets[source], 0, nullptr);
     const auto n = velocity.domain.dimensions;
-    const Parameters parameters{n, 0.5f / velocity.domain.spacing};
+    const Parameters parameters{n, 1.0f / velocity.domain.spacing};
     vkCmdPushConstants(command, sim.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(parameters), &parameters);
     vkCmdDispatch(command, (n[0]+3)/4, (n[1]+3)/4, (n[2]+3)/4);
     auto& ready = barriers[1];

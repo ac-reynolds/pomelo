@@ -3,6 +3,7 @@
 #include "graphics/advection.hpp"
 #include "graphics/divergence.hpp"
 #include "graphics/pressure.hpp"
+#include "graphics/projection.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -63,6 +64,7 @@ struct VulkanContext {
     graphics::VolumePipeline volume_pipeline;
     std::array<graphics::VolumeView, 2> pressure_views;
     simulation::PressureSolve pressure;
+    simulation::Projection projection;
     std::array<bool, 2> pressure_submitted{};
     std::string pressure_status{"Ready"};
     std::array<graphics::VolumeView, 2> density_views;
@@ -397,6 +399,7 @@ struct VulkanContext {
             vkDeviceWaitIdle(device);
             destroy_swapchain();
             for (auto& view : pressure_views) graphics::destroy_volume_view(view, device);
+            simulation::destroy_projection(projection, device);
             simulation::destroy_pressure(pressure, device);
             for (auto& view : density_views) graphics::destroy_volume_view(view, device);
             simulation::destroy_divergence(divergence, device);
@@ -434,6 +437,8 @@ graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::In
             {simulation::velocity_view(vk.fields, 0, 0), simulation::velocity_view(vk.fields, 1, 0)}, divergence);
         const std::array pressure_fields{simulation::pressure_view(vk.fields, 0, 0), simulation::pressure_view(vk.fields, 1, 0)};
         simulation::create_pressure(vk.pressure, vk.physical_device, vk.device, divergence, pressure_fields, vk.frames.size());
+        simulation::create_projection(vk.projection, vk.physical_device, vk.device,
+            {simulation::velocity_view(vk.fields, 0, 0), simulation::velocity_view(vk.fields, 1, 0)}, pressure_fields);
         for (size_t i = 0; i < pressure_fields.size(); ++i)
             create_volume_view(vk.pressure_views[i], vk.device, vk.volume_pipeline, pressure_fields[i], true, 0.25f);
         for (size_t i = 0; i < fields.size(); ++i)
@@ -490,6 +495,10 @@ graphics::SimulationOutput graphics::VulkanBackend::step_simulation(Frame token)
     simulation::record_divergence(vk.divergence, vk.frames[token.frame_index].command_buffer, vk.pending_step.velocity_output);
     const auto pressure = simulation::record_pressure(vk.pressure, vk.frames[token.frame_index].command_buffer,
         vk.pending_step.dt, vk.pending_step.output.version, token.frame_index);
+    simulation::record_projection(vk.projection, vk.frames[token.frame_index].command_buffer,
+        vk.pending_step.velocity_output, pressure, vk.pending_step.dt);
+    // Preserve divergence as a view of the final velocity, not the pre-projection RHS.
+    simulation::record_divergence(vk.divergence, vk.frames[token.frame_index].command_buffer, vk.pending_step.velocity_output);
     vk.step_recorded = true;
     return {vk.pending_step.output, pressure};
 }

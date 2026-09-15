@@ -139,17 +139,16 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
                     for (size_t axis = 0; axis < 3; ++axis) {
                         auto lo = cell, hi = cell;
                         lo[axis] = (cell[axis] + n[axis] - 1) % n[axis];
-                        hi[axis] = (cell[axis] + 1) % n[axis];
                         const auto l = geometry::cell_index(initial.density, lo[0], lo[1], lo[2]);
                         const auto h = geometry::cell_index(initial.density, hi[0], hi[1], hi[2]);
-                        expected_divergence += (double(velocity[4*h+axis]) - velocity[4*l+axis]) / (2 * fields.domain.spacing);
+                        expected_divergence += (double(velocity[4*h+axis]) - velocity[4*l+axis]) / fields.domain.spacing;
                     }
                     const auto index = geometry::cell_index(initial.density, x, y, z);
                     require(std::isfinite(divergence_values[index]), "Nonfinite divergence");
                     divergence_error = std::max(divergence_error, float(std::abs(divergence_values[index] - expected_divergence)));
                     magnitude = std::max(magnitude, std::abs(divergence_values[index]));
                 }
-        require(divergence_error < 1e-5f, "Divergence differs from central differences of new velocity");
+        require(divergence_error < 1e-5f, "Divergence differs from backward differences of new velocity");
         if (std::strcmp(name, "velocity self-advection") == 0 || std::strcmp(name, "divergence stencil") == 0 || std::strcmp(name, "default resolution") == 0)
             require(magnitude > 0.01f, "Expected nonzero divergence");
         if (std::strcmp(name, "initial crossed flow") == 0)

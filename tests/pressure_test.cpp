@@ -225,12 +225,12 @@ void evolving(Context& c, uint32_t size, uint32_t steps, bool solve_each_step) {
                 for (uint32_t x = 0; x < size; ++x) {
                     uint32_t at[3]={x,y,z}; double expected = 0;
                     for (uint32_t a=0;a<3;++a) {
-                        auto old = at[a]; at[a]=(old+1)%size;
+                        auto old = at[a];
                         expected += v[4*geometry::cell_index(grid,at[0],at[1],at[2])+a];
                         at[a]=(old+size-1)%size;
                         expected -= v[4*geometry::cell_index(grid,at[0],at[1],at[2])+a]; at[a]=old;
                     }
-                    expected /= 2*grid.spacing;
+                    expected /= grid.spacing;
                     max_d_error=std::max(max_d_error,std::abs(expected-d[geometry::cell_index(grid,x,y,z)]));
                 }
         require(max_d_error < 1e-5,"Pressure RHS is not from the advected velocity");
