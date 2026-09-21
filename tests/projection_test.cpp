@@ -1,4 +1,5 @@
 #include "vulkan_test_helpers.hpp"
+#include "graphics/smoke.hpp"
 #include "graphics/pressure.hpp"
 #include "graphics/projection.hpp"
 #include <limits>
@@ -27,8 +28,13 @@ double rms(const std::vector<double>& values) {
 }
 void compare(const std::vector<float>& actual, const std::vector<float>& expected, float tolerance, const char* message) {
     require(actual.size()==expected.size(),"Reference size mismatch");
-    for (size_t i=0;i<actual.size();++i)
-        require(std::isfinite(actual[i]) && std::abs(actual[i]-expected[i]) <= tolerance,message);
+    float error=0;
+    for (size_t i=0;i<actual.size();++i) {
+        require(std::isfinite(actual[i]),message);
+        error=std::max(error,std::abs(actual[i]-expected[i]));
+    }
+    if (error>tolerance) std::fprintf(stderr,"%s: max error %.9g, tolerance %.9g\n",message,error,tolerance);
+    require(error<=tolerance,message);
 }
 
 void exact_gradient(Context& c, Dimensions n, float h, float dt, bool constant_pressure = false) {
@@ -135,12 +141,84 @@ std::vector<float> pressure_reference(const std::vector<double>& d, Dimensions n
     return result;
 }
 
-void full_steps(Context& c, Dimensions n, unsigned steps) {
+void source_updates(Context& c) {
+    const Dimensions n{9,11,7};
+    const VkExtent3D extent{n[0],n[1],n[2]};
+    auto initial=simulation::smoke_initial_conditions(n,{-2,1,4},0.25f);
+    std::fill(initial.density.values.begin(),initial.density.values.end(),0.8f);
+    std::fill(initial.temperature.begin(),initial.temperature.end(),2.0f);
+    for (auto& v:initial.velocity) v={0.3f,-0.2f,0.1f,0};
+    simulation::SimulationFields fields;
+    simulation::Smoke source;
+    auto cleanup=[&] {
+        vkDeviceWaitIdle(c.device);
+        simulation::destroy_smoke(source,c.device);
+        simulation::destroy_fields(fields,c.device);
+    };
+    try {
+        simulation::create_fields(fields,c.physical,c.device,c.queue,c.family,initial);
+        simulation::create_smoke(source,c.physical,c.device,fields);
+        auto p=simulation::smoke_parameters(fields.domain);
+        p.density_rate=20;
+        for (unsigned mode=0;mode<4;++mode) {
+            const float dt=mode==0 ? 0 : 0.2f;
+            p.enabled=mode==1;
+            const float initial_heat=mode==3 ? 0.0f : 2.0f;
+            std::fill(initial.temperature.begin(),initial.temperature.end(),initial_heat);
+            // Reset both destinations so every case has independently known input.
+            for (unsigned i=0;i<2;++i) {
+                gpu::upload_image(fields.density[i],c.physical,c.device,c.queue,c.family,extent,
+                    initial.density.values.data(),initial.density.values.size()*sizeof(float),VK_IMAGE_LAYOUT_GENERAL);
+                gpu::upload_image(fields.temperature[i],c.physical,c.device,c.queue,c.family,extent,
+                    initial.temperature.data(),initial.temperature.size()*sizeof(float),VK_IMAGE_LAYOUT_GENERAL);
+                gpu::upload_image(fields.velocity[i],c.physical,c.device,c.queue,c.family,extent,
+                    initial.velocity.data(),initial.velocity.size()*sizeof(initial.velocity[0]),VK_IMAGE_LAYOUT_GENERAL);
+            }
+            auto step=simulation::prepare_advection(fields,dt);
+            auto& slot=c.slots[mode%2]; begin(c,slot);
+            if (mode==0) {
+                auto invalid=p; invalid.radius=0;
+                bool rejected=false;
+                try { simulation::record_smoke(source,slot.command,step,invalid); }
+                catch (const std::invalid_argument&) { rejected=true; }
+                require(rejected,"Invalid emitter radius accepted");
+            }
+            simulation::record_smoke(source,slot.command,step,p);
+            submit(c,slot); simulation::commit_step(fields,step);
+            auto rho=read_image(c,simulation::current_density(fields).image,extent,1,VK_IMAGE_LAYOUT_GENERAL);
+            auto theta=read_image(c,simulation::current_temperature(fields).image,extent,1,VK_IMAGE_LAYOUT_GENERAL);
+            auto velocity=read_image(c,simulation::current_velocity(fields).image,extent,4,VK_IMAGE_LAYOUT_GENERAL);
+            bool saturated=false, interior=false, exterior=false;
+            for (uint32_t z=0;z<n[2];++z) for (uint32_t y=0;y<n[1];++y) for (uint32_t x=0;x<n[0];++x) {
+                const auto i=geometry::cell_index(initial.density,x,y,z);
+                const auto pos=geometry::cell_center(initial.density,x,y,z);
+                double r2=0;
+                for (unsigned a=0;a<3;++a) r2+=std::pow((pos[a]-p.center[a])/p.radius,2);
+                interior|=r2<1; exterior|=r2>=1;
+                double w=p.enabled ? std::pow(std::max(0.0,1-r2),2) : 0;
+                const double expected_rho=std::min(1.0,0.8f*std::exp(-double(p.dissipation)*dt)+dt*p.density_rate*w);
+                const double expected_theta=initial_heat*std::exp(-double(p.cooling)*dt)+dt*p.heat_rate*w;
+                saturated|=expected_rho==1;
+                require(std::abs(rho[i]-expected_rho)<2e-6,"Source density incorrect");
+                require(std::abs(theta[i]-expected_theta)<2e-6,"Source heat/cooling incorrect");
+                require(std::abs(velocity[4*i+1]-(-0.2f+dt*p.buoyancy*expected_theta))<2e-6,"Source buoyancy incorrect");
+                require(velocity[4*i]==0.3f && velocity[4*i+2]==0.1f && velocity[4*i+3]==0,"Source changed other velocity components");
+            }
+            require(interior && exterior,"Source coverage incomplete");
+            if (dt>0 && p.enabled) require(saturated,"Source saturation not exercised");
+        }
+        cleanup();
+    } catch (...) { cleanup(); throw; }
+}
+
+void full_steps(Context& c, Dimensions n, unsigned steps, bool smoke = false) {
     constexpr float h=0.25f,dt=0.04f;
-    auto initial=simulation::initial_conditions(n,{},h);
+    auto initial=smoke ? simulation::smoke_initial_conditions(n,{-2,1,4},h) : simulation::initial_conditions(n,{},h);
     VkExtent3D extent{n[0],n[1],n[2]};
     simulation::SimulationFields fields;
     simulation::Advection advection;
+    simulation::Smoke source;
+    simulation::SmokeParameters source_parameters;
     simulation::Divergence divergence;
     simulation::PressureSolve pressure;
     simulation::Projection projection;
@@ -155,6 +233,7 @@ void full_steps(Context& c, Dimensions n, unsigned steps) {
         simulation::destroy_projection(projection,c.device);
         simulation::destroy_pressure(pressure,c.device);
         simulation::destroy_divergence(divergence,c.device);
+        simulation::destroy_smoke(source,c.device);
         simulation::destroy_advection(advection,c.device);
         simulation::destroy_fields(fields,c.device);
     };
@@ -163,10 +242,15 @@ void full_steps(Context& c, Dimensions n, unsigned steps) {
         const std::array v{simulation::velocity_view(fields,0,0),simulation::velocity_view(fields,1,0)};
         const std::array d{simulation::density_view(fields,0,0),simulation::density_view(fields,1,0)};
         const std::array p{simulation::pressure_view(fields,0,0),simulation::pressure_view(fields,1,0)};
-        simulation::create_advection(advection,c.physical,c.device,d,v);
+        simulation::create_advection(advection,c.physical,c.device,d,v,
+            {simulation::temperature_view(fields, 0, 0), simulation::temperature_view(fields, 1, 0)});
         simulation::create_divergence(divergence,c.physical,c.device,v,simulation::divergence_view(fields,0));
         simulation::create_pressure(pressure,c.physical,c.device,simulation::divergence_view(fields,0),p,2);
         simulation::create_projection(projection,c.physical,c.device,v,p);
+        if (smoke) {
+            simulation::create_smoke(source,c.physical,c.device,fields);
+            source_parameters = simulation::smoke_parameters(fields.domain);
+        }
         graphics::create_volume_pipeline(pipeline,c.physical,c.device);
         for (unsigned i=0;i<2;++i) {
             graphics::create_volume_view(pressure_views[i],c.device,pipeline,p[i],true,0.25f);
@@ -175,6 +259,7 @@ void full_steps(Context& c, Dimensions n, unsigned steps) {
                 c.physical,c.device,{16,16});
         }
         auto expected_density=initial.density.values;
+        auto expected_temperature=initial.temperature;
         std::vector<float> expected_velocity(initial.velocity.size()*4);
         std::memcpy(expected_velocity.data(),initial.velocity.data(),expected_velocity.size()*sizeof(float));
         std::vector<float> expected_pressure;
@@ -184,6 +269,10 @@ void full_steps(Context& c, Dimensions n, unsigned steps) {
             auto& slot=c.slots[step_index%2]; begin(c,slot);
             auto step=simulation::prepare_advection(fields,dt);
             simulation::record_advection(advection,slot.command,step);
+            if (smoke) {
+                source_parameters.enabled = step_index < steps / 2;
+                simulation::record_smoke(source,slot.command,step,source_parameters);
+            }
             simulation::record_divergence(divergence,slot.command,step.velocity_output);
             simulation::PressureSettings settings;
             settings.iterations+=(step_index/2)%2;
@@ -195,12 +284,37 @@ void full_steps(Context& c, Dimensions n, unsigned steps) {
             graphics::record_volume_view(density_views[(step_index+1)%2],slot.target,slot.command,{});
             submit(c,slot); simulation::commit_step(fields,step);
 
+            expected_temperature=advect_reference(expected_temperature,1,expected_velocity,n,double(dt)/h);
             expected_density=advect_reference(expected_density,1,expected_velocity,n,double(dt)/h);
             expected_velocity=advect_reference(expected_velocity,4,expected_velocity,n,double(dt)/h);
+            if (smoke) {
+                const auto& p = source_parameters;
+                for (uint32_t z=0;z<n[2];++z) for (uint32_t y=0;y<n[1];++y) for (uint32_t x=0;x<n[0];++x) {
+                    const auto i=geometry::cell_index(initial.density,x,y,z);
+                    const auto pos=geometry::cell_center(initial.density,x,y,z);
+                    double r2=0;
+                    for (unsigned a=0;a<3;++a) r2+=std::pow((pos[a]-p.center[a])/p.radius,2);
+                    const double w=p.enabled ? std::pow(std::max(0.0,1-r2),2) : 0;
+                    expected_density[i]=std::min(1.0,expected_density[i]*std::exp(-double(p.dissipation)*dt)+dt*p.density_rate*w);
+                    expected_temperature[i]=expected_temperature[i]*std::exp(-double(p.cooling)*dt)+dt*p.heat_rate*w;
+                    expected_velocity[4*i+1]+=dt*p.buoyancy*expected_temperature[i];
+                }
+            }
             before=divergence_of(expected_velocity,n,h);
             expected_pressure=pressure_reference(before,n,h,dt,settings.iterations);
             for (size_t i=0;i<before.size();++i) for (unsigned a=0;a<3;++a)
                 expected_velocity[4*i+a]-=dt/h*(expected_pressure[neighbor(n,i,a,1)]-expected_pressure[i]);
+        }
+        compare(read_image(c,simulation::current_temperature(fields).image,extent,1,VK_IMAGE_LAYOUT_GENERAL),expected_temperature,2e-5f,
+            "Temperature did not follow the projected flow and source updates");
+        if (smoke) {
+            double heat=0, height=0;
+            for (uint32_t z=0;z<n[2];++z) for (uint32_t y=0;y<n[1];++y) for (uint32_t x=0;x<n[0];++x) {
+                const auto i=geometry::cell_index(initial.density,x,y,z);
+                heat+=expected_temperature[i];
+                height+=expected_temperature[i]*geometry::cell_center(initial.density,x,y,z)[1];
+            }
+            require(heat>0 && height/heat>source_parameters.center[1]+0.005,"Heat did not rise away from emitter");
         }
         auto actual_velocity=read_image(c,simulation::current_velocity(fields).image,extent,4,VK_IMAGE_LAYOUT_GENERAL);
         compare(actual_velocity,expected_velocity,2e-5f,"Projected velocity or next-step feedback differs from CPU reference");
@@ -237,6 +351,8 @@ int main() {
         full_steps(c,{8,6,4},8);
         full_steps(c,{9,7,5},7);
         full_steps(c,{1,5,2},4);
+        source_updates(c);
+        full_steps(c,{9,11,7},60,true);
         destroy(c); require(c.errors==0,"Vulkan validation errors"); return 0;
     } catch (const std::exception& e) { std::fprintf(stderr,"%s\n",e.what()); destroy(c); return 1; }
 }

@@ -75,6 +75,7 @@ add_library(graphics STATIC
     src/graphics/projection.cpp
     src/graphics/pressure.cpp
     src/graphics/divergence.cpp
+    src/graphics/smoke.cpp
     src/graphics/advection.cpp
     src/graphics/initial_conditions.cpp
     src/graphics/uniform_grid.cpp
@@ -111,7 +112,7 @@ add_custom_command(OUTPUT ${divergence_spirv} ${divergence_source}
     VERBATIM
 )
 target_sources(graphics PRIVATE ${divergence_source})
-foreach(shader pressure pressure_reduce pressure_statistics pressure_normalize projection)
+foreach(shader smoke pressure pressure_reduce pressure_statistics pressure_normalize projection)
     set(spirv ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/${shader}_comp.spv)
     set(source ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/${shader}_comp.cpp)
     add_custom_command(OUTPUT ${spirv} ${source}

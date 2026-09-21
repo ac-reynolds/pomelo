@@ -14,7 +14,8 @@ static_assert(sizeof(Step) == 16 && offsetof(Step, dt_over_spacing) == 12);
 }
 
 void simulation::create_advection(Advection& sim, VkPhysicalDevice physical, VkDevice device,
-    const std::array<graphics::FieldView, 2>& density, const std::array<graphics::FieldView, 2>& velocity) {
+    const std::array<graphics::FieldView, 2>& density, const std::array<graphics::FieldView, 2>& velocity,
+    const std::array<graphics::FieldView, 2>& temperature) {
     const auto& domain = density[0].domain;
     if (density[0].image.image == density[1].image.image || !std::isfinite(domain.spacing) || domain.spacing <= 0)
         throw std::invalid_argument("Advection requires distinct images and positive spacing");
@@ -30,10 +31,21 @@ void simulation::create_advection(Advection& sim, VkPhysicalDevice physical, VkD
             field.layout != VK_IMAGE_LAYOUT_GENERAL || field.domain.dimensions != domain.dimensions ||
             field.domain.origin != domain.origin || field.domain.spacing != domain.spacing)
             throw std::invalid_argument("Incompatible advection velocity field");
+    for (const auto& field : temperature)
+        if (!field.image.image || !field.image.view || field.format != VK_FORMAT_R32_SFLOAT ||
+            field.layout != VK_IMAGE_LAYOUT_GENERAL || field.domain.dimensions != domain.dimensions ||
+            field.domain.origin != domain.origin || field.domain.spacing != domain.spacing)
+            throw std::invalid_argument("Incompatible advection temperature field");
+    const std::array images{density[0].image.image, density[1].image.image,
+        velocity[0].image.image, velocity[1].image.image, temperature[0].image.image, temperature[1].image.image};
+    for (size_t i = 0; i < images.size(); ++i)
+        for (size_t j = 0; j < i; ++j)
+            if (images[i] == images[j]) throw std::invalid_argument("Advection fields must not alias");
     VkShaderModule shader{};
     try {
         sim.inputs = density;
         sim.velocity = velocity;
+        sim.temperature = temperature;
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(physical, &properties);
         if (properties.limits.maxComputeWorkGroupInvocations < 64)
@@ -46,12 +58,14 @@ void simulation::create_advection(Advection& sim, VkPhysicalDevice physical, VkD
             {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-            {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
         VkDescriptorSetLayoutCreateInfo descriptor_layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        descriptor_layout.bindingCount = 4;
+        descriptor_layout.bindingCount = 6;
         descriptor_layout.pBindings = bindings;
         check(vkCreateDescriptorSetLayout(device, &descriptor_layout, nullptr, &sim.descriptor_layout));
-        const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4}};
+        const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 6}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 6}};
         VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         pool.maxSets = 2;
         pool.poolSizeCount = 2;
@@ -67,8 +81,10 @@ void simulation::create_advection(Advection& sim, VkPhysicalDevice physical, VkD
                 {VK_NULL_HANDLE, sim.inputs[i].image.view, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, sim.velocity[i].image.view, VK_IMAGE_LAYOUT_GENERAL},
                 {VK_NULL_HANDLE, sim.inputs[1-i].image.view, VK_IMAGE_LAYOUT_GENERAL},
-                {VK_NULL_HANDLE, sim.velocity[1-i].image.view, VK_IMAGE_LAYOUT_GENERAL}};
-            for (uint32_t binding = 0; binding < 4; ++binding) {
+                {VK_NULL_HANDLE, sim.velocity[1-i].image.view, VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, sim.temperature[i].image.view, VK_IMAGE_LAYOUT_GENERAL},
+                {VK_NULL_HANDLE, sim.temperature[1-i].image.view, VK_IMAGE_LAYOUT_GENERAL}};
+            for (uint32_t binding = 0; binding < 6; ++binding) {
                 VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                 write.dstSet = sim.sets[i];
                 write.dstBinding = binding;
@@ -121,15 +137,18 @@ void simulation::record_advection(const Advection& sim, VkCommandBuffer command,
     if (!graphics::same_field_binding(operation.input, sim.inputs[source]) ||
         !graphics::same_field_binding(operation.output, sim.inputs[destination]) ||
         !graphics::same_field_binding(operation.velocity, sim.velocity[source]) ||
-        !graphics::same_field_binding(operation.velocity_output, sim.velocity[destination]))
+        !graphics::same_field_binding(operation.velocity_output, sim.velocity[destination]) ||
+        !graphics::same_field_binding(operation.temperature, sim.temperature[source]) ||
+        !graphics::same_field_binding(operation.temperature_output, sim.temperature[destination]))
         throw std::invalid_argument("Advection fields do not match immutable bindings");
     const auto dimensions = operation.input.domain.dimensions;
-    std::array<VkImageMemoryBarrier, 4> barriers{};
-    for (uint32_t i = 0; i < 4; ++i) {
+    std::array<VkImageMemoryBarrier, 6> barriers{};
+    for (uint32_t i = 0; i < 6; ++i) {
         auto& barrier = barriers[i];
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = i < 2 ? sim.inputs[i].image.image : sim.velocity[i - 2].image.image;
+        barrier.image = i < 2 ? sim.inputs[i].image.image :
+            i < 4 ? sim.velocity[i - 2].image.image : sim.temperature[i - 4].image.image;
         barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         barrier.oldLayout = barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
         barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
@@ -138,30 +157,36 @@ void simulation::record_advection(const Advection& sim, VkCommandBuffer command,
     // Includes earlier submissions on this queue, particularly fragment reads of
     // the image that is about to become the destination again.
     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 4, barriers.data());
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 6, barriers.data());
     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, sim.pipeline);
     vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, sim.layout, 0, 1, &sim.sets[source], 0, nullptr);
     const Step step{dimensions, ratio};
     vkCmdPushConstants(command, sim.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(step), &step);
     vkCmdDispatch(command, (dimensions[0] + 3) / 4, (dimensions[1] + 3) / 4, (dimensions[2] + 3) / 4);
-    std::array<VkImageMemoryBarrier, 2> ready{barriers[destination], barriers[2 + destination]};
+    std::array<VkImageMemoryBarrier, 3> ready{barriers[destination], barriers[2 + destination], barriers[4 + destination]};
     for (auto& barrier : ready) {
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     }
     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 2, ready.data());
+        0, 0, nullptr, 0, nullptr, 3, ready.data());
 
 }
 
 simulation::AdvectionStep simulation::prepare_advection(const SimulationFields& fields, float dt) {
     return {current_density(fields), current_velocity(fields),
             density_view(fields, 1 - fields.submitted_steps % 2, fields.submitted_steps + 1),
-            velocity_view(fields, 1 - fields.submitted_steps % 2, fields.submitted_steps + 1), dt};
+            velocity_view(fields, 1 - fields.submitted_steps % 2, fields.submitted_steps + 1), current_temperature(fields),
+            temperature_view(fields, 1 - fields.submitted_steps % 2, fields.submitted_steps + 1), dt};
 }
 void simulation::commit_step(SimulationFields& fields, const AdvectionStep& step) {
-    if (step.input.version != fields.submitted_steps ||
+    if (step.temperature.version != fields.submitted_steps ||
+        !graphics::same_field_binding(step.temperature, current_temperature(fields)) ||
+        step.temperature_output.version != fields.submitted_steps + 1 ||
+        !graphics::same_field_binding(step.temperature_output,
+            temperature_view(fields, 1 - fields.submitted_steps % 2, fields.submitted_steps + 1)) ||
+        step.input.version != fields.submitted_steps ||
         step.input.image.view != current_density(fields).image.view ||
         step.output.image.view != fields.density[1 - fields.submitted_steps % 2].view ||
         step.output.version != fields.submitted_steps + 1 ||

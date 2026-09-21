@@ -1,6 +1,7 @@
 #include "graphics/vulkan_backend.hpp"
 #include "graphics/volume_view.hpp"
 #include "graphics/advection.hpp"
+#include "graphics/smoke.hpp"
 #include "graphics/divergence.hpp"
 #include "graphics/pressure.hpp"
 #include "graphics/projection.hpp"
@@ -72,6 +73,8 @@ struct VulkanContext {
     simulation::SimulationFields fields;
     simulation::AdvectionStep pending_step;
     simulation::Advection simulation;
+    simulation::Smoke smoke;
+    simulation::SmokeParameters smoke_parameters;
     bool step_recorded{};
     bool imgui_initialized{};
     bool swapchain_dirty{};
@@ -404,6 +407,7 @@ struct VulkanContext {
             for (auto& view : density_views) graphics::destroy_volume_view(view, device);
             simulation::destroy_divergence(divergence, device);
             graphics::destroy_volume_pipeline(volume_pipeline, device);
+            simulation::destroy_smoke(smoke, device);
             simulation::destroy_advection(simulation, device);
             simulation::destroy_fields(fields, device);
             if (imgui_initialized) ImGui_ImplVulkan_Shutdown();
@@ -430,7 +434,10 @@ graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::In
         auto& vk = impl_->vk;
         simulation::create_fields(vk.fields, vk.physical_device, vk.device, vk.queue, vk.queue_family, initial);
         const std::array fields{simulation::density_view(vk.fields, 0, 0), simulation::density_view(vk.fields, 1, 0)};
-        simulation::create_advection(vk.simulation, vk.physical_device, vk.device, fields, {simulation::velocity_view(vk.fields, 0, 0), simulation::velocity_view(vk.fields, 1, 0)});
+        simulation::create_advection(vk.simulation, vk.physical_device, vk.device, fields, {simulation::velocity_view(vk.fields, 0, 0), simulation::velocity_view(vk.fields, 1, 0)},
+            {simulation::temperature_view(vk.fields, 0, 0), simulation::temperature_view(vk.fields, 1, 0)});
+        simulation::create_smoke(vk.smoke, vk.physical_device, vk.device, vk.fields);
+        vk.smoke_parameters = simulation::smoke_parameters(vk.fields.domain);
         create_volume_pipeline(vk.volume_pipeline, vk.physical_device, vk.device);
         const auto divergence = simulation::divergence_view(vk.fields, 0);
         simulation::create_divergence(vk.divergence, vk.physical_device, vk.device,
@@ -492,6 +499,7 @@ graphics::SimulationOutput graphics::VulkanBackend::step_simulation(Frame token)
     if (vk.step_recorded) throw std::logic_error("Simulation already recorded for this frame");
     vk.pending_step = simulation::prepare_advection(vk.fields);
     simulation::record_advection(vk.simulation, vk.frames[token.frame_index].command_buffer, vk.pending_step);
+    simulation::record_smoke(vk.smoke, vk.frames[token.frame_index].command_buffer, vk.pending_step, vk.smoke_parameters);
     simulation::record_divergence(vk.divergence, vk.frames[token.frame_index].command_buffer, vk.pending_step.velocity_output);
     const auto pressure = simulation::record_pressure(vk.pressure, vk.frames[token.frame_index].command_buffer,
         vk.pending_step.dt, vk.pending_step.output.version, token.frame_index);

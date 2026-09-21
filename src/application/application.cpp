@@ -19,7 +19,7 @@ int application::run() {
             chrome::Chrome chrome;
             window.initialize_imgui_platform();
             try {
-                const auto initial = simulation::initial_conditions();
+                const auto initial = simulation::smoke_initial_conditions();
                 graphics::VulkanBackend graphics(window.native_window(), initial);
                 chrome::ViewportState viewport{1, 1, false, false};
                 graphics::OrbitCamera camera;

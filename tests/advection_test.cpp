@@ -49,7 +49,8 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
     try {
         simulation::create_fields(fields, c.physical, c.device, c.queue, c.family, initial);
         const std::array views{simulation::density_view(fields, 0, 0), simulation::density_view(fields, 1, 0)};
-        simulation::create_advection(sim, c.physical, c.device, views, {simulation::velocity_view(fields, 0, 0), simulation::velocity_view(fields, 1, 0)});
+        simulation::create_advection(sim, c.physical, c.device, views, {simulation::velocity_view(fields, 0, 0), simulation::velocity_view(fields, 1, 0)},
+            {simulation::temperature_view(fields, 0, 0), simulation::temperature_view(fields, 1, 0)});
         simulation::create_divergence(divergence, c.physical, c.device,
             {simulation::velocity_view(fields, 0, 0), simulation::velocity_view(fields, 1, 0)},
             simulation::divergence_view(fields, 0));
@@ -59,6 +60,7 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             graphics::create_volume_view(volume_views[i], c.device, pipeline, views[i]);
         for (auto& slot : c.slots) graphics::create_render_target(slot.target, {pipeline.render_pass, pipeline.color_format, pipeline.depth_format}, c.physical, c.device, {16, 16});
         auto expected = initial.density.values;
+        auto expected_temperature = initial.temperature;
         auto reference_state = initial;
         for (unsigned i = 0; i < steps; ++i) {
             auto& slot = c.slots[i % 2]; begin(c, slot);
@@ -77,6 +79,12 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             require(step.velocity_output.image.view == fields.velocity[(i + 1) % 2].view &&
                     step.velocity_output.version == step.output.version, "Velocity parity/version mismatch");
             graphics::record_volume_view(volume_views[(i + 1) % 2], slot.target, slot.command, {});
+            auto stale = step;
+            ++stale.temperature_output.version;
+            bool rejected_temperature = false;
+            try { simulation::commit_step(fields, stale); }
+            catch (const std::logic_error&) { rejected_temperature = true; }
+            require(rejected_temperature, "Committed stale temperature version");
             submit(c, slot); simulation::commit_step(fields, step);
             if (i == 0) {
                 bool rejected = false;
@@ -85,6 +93,7 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
                 require(rejected, "Committed the same field version twice");
             }
             expected = reference(reference_state, expected, dt);
+            expected_temperature = reference(reference_state, expected_temperature, dt);
             auto next_velocity = reference_state.velocity;
             for (size_t component = 0; component < 3; ++component) {
                 std::vector<float> values(expected.size());
@@ -117,6 +126,10 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
                 require(std::abs(actual[x] - initial.density.values[x]) < 1e-6f,
                         "Zero-velocity row moved");
         }
+        const auto temperature = read_image(c, simulation::current_temperature(fields).image, extent, 1, VK_IMAGE_LAYOUT_GENERAL);
+        for (size_t cell = 0; cell < temperature.size(); ++cell)
+            require(std::isfinite(temperature[cell]) && std::abs(temperature[cell] - expected_temperature[cell]) < tolerance * 4,
+                "Advected temperature differs from CPU reference");
         auto velocity = read_image(c, fields.velocity[fields.submitted_steps % 2], extent, 4, VK_IMAGE_LAYOUT_GENERAL);
         float velocity_error = 0, velocity_change = 0;
         for (size_t cell = 0; cell < expected.size(); ++cell) {
@@ -188,9 +201,12 @@ int main() {
     Context c;
     try {
         if (!create(c)) { destroy(c); std::puts("No graphics/compute Vulkan device; skipped"); return 77; }
-        const auto defaults = simulation::initial_conditions();
+        auto defaults = simulation::initial_conditions();
+        std::fill(defaults.temperature.begin(), defaults.temperature.end(), 3.0f);
         require(defaults.density.dimensions == std::array<uint32_t, 3>{64, 64, 64} &&
                 defaults.density.spacing == 2.0f / 64, "Default grid and domain");
+        // Tiny nonzero velocities near sin(pi) must not shift sampling by one cell.
+        run(c, "odd crossed", simulation::initial_conditions({9,7,5},{},0.25f), 1, 0.04f);
         run(c, "initial crossed flow", defaults, 1, 0);
         run(c, "default resolution", defaults, 1, simulation::timestep);
         // Keep the long numerical regression at its explicit reference resolution.
@@ -209,6 +225,7 @@ int main() {
         auto fixture = simulation::initial_conditions({7, 5, 3}, {-2, 1, 4}, 0.25f);
         for (size_t i = 0; i < fixture.density.values.size(); ++i)
             fixture.density.values[i] = float((i * 17) % 101) / 100;
+        for (size_t i = 0; i < fixture.temperature.size(); ++i) fixture.temperature[i] = float((i * 13) % 71) / 20;
         run(c, "zero timestep", fixture, 3, 0);
         for (auto& v : fixture.velocity) v = {};
         run(c, "zero velocity", fixture, 3, 0.25f);

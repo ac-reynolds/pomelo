@@ -29,3 +29,6 @@ extern const std::size_t pressure_normalize_comp_spirv_size;
 
 extern const std::uint32_t projection_comp_spirv[];
 extern const std::size_t projection_comp_spirv_size;
+
+extern const std::uint32_t smoke_comp_spirv[];
+extern const std::size_t smoke_comp_spirv_size;

@@ -14,6 +14,13 @@ void simulation::create_fields(SimulationFields& fields, VkPhysicalDevice physic
             gpu::upload_image(density, physical, device, queue, queue_family, extent,
                 initial.density.values.data(), initial.density.values.size() * sizeof(float), VK_IMAGE_LAYOUT_GENERAL);
         }
+        for (auto& temperature : fields.temperature) {
+            gpu::create_image(temperature, physical, device, extent, VK_IMAGE_TYPE_3D, VK_FORMAT_R32_SFLOAT,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            gpu::upload_image(temperature, physical, device, queue, queue_family, extent,
+                initial.temperature.data(), initial.temperature.size() * sizeof(float), VK_IMAGE_LAYOUT_GENERAL);
+        }
         for (auto& velocity : fields.velocity) {
             gpu::create_image(velocity, physical, device, extent, VK_IMAGE_TYPE_3D, VK_FORMAT_R32G32B32A32_SFLOAT,
                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -39,6 +46,7 @@ void simulation::create_fields(SimulationFields& fields, VkPhysicalDevice physic
 }
 void simulation::destroy_fields(SimulationFields& fields, VkDevice device) {
     for (auto& image : fields.density) gpu::destroy_image(image, device);
+    for (auto& image : fields.temperature) gpu::destroy_image(image, device);
     for (auto& image : fields.velocity) gpu::destroy_image(image, device);
     gpu::destroy_image(fields.divergence, device);
     for (auto& image : fields.pressure) gpu::destroy_image(image, device);
@@ -62,4 +70,10 @@ graphics::FieldView simulation::divergence_view(const SimulationFields& fields, 
 
 graphics::FieldView simulation::pressure_view(const SimulationFields& fields, uint32_t index, uint64_t version) {
     return {fields.pressure.at(index), VK_FORMAT_R32_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, fields.domain, version};
+}
+graphics::FieldView simulation::temperature_view(const SimulationFields& fields, uint32_t index, uint64_t version) {
+    return {fields.temperature.at(index), VK_FORMAT_R32_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, fields.domain, version};
+}
+graphics::FieldView simulation::current_temperature(const SimulationFields& fields) {
+    return temperature_view(fields, fields.submitted_steps % 2, fields.submitted_steps);
 }

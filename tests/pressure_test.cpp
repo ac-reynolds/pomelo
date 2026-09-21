@@ -167,7 +167,8 @@ void evolving(Context& c, uint32_t size, uint32_t steps, bool solve_each_step) {
         simulation::create_fields(fields,c.physical,c.device,c.queue,c.family,initial);
         simulation::create_advection(advection,c.physical,c.device,
             {simulation::density_view(fields,0,0),simulation::density_view(fields,1,0)},
-            {simulation::velocity_view(fields,0,0),simulation::velocity_view(fields,1,0)});
+            {simulation::velocity_view(fields,0,0),simulation::velocity_view(fields,1,0)},
+            {simulation::temperature_view(fields, 0, 0), simulation::temperature_view(fields, 1, 0)});
         simulation::create_divergence(divergence,c.physical,c.device,
             {simulation::velocity_view(fields,0,0),simulation::velocity_view(fields,1,0)},simulation::divergence_view(fields,0));
         simulation::create_pressure(pressure,c.physical,c.device,simulation::divergence_view(fields,0),
