@@ -1,6 +1,6 @@
 # Pomelo
 
-A C++20 application using SDL3, Vulkan, and Dear ImGui. A compute shader advects a passive density field while also advecting velocity through itself, and a full-screen ray marcher renders velocity divergence. Collapsible simulation and rendering panels overlay the viewport, with a one-line status bar below.
+A C++20 smoke simulator using SDL3 and Vulkan. Compute shaders evolve density, temperature, and velocity, and a full-window ray marcher renders the smoke density.
 
 ## Prerequisites
 
@@ -9,9 +9,9 @@ A C++20 application using SDL3, Vulkan, and Dear ImGui. A compute shader advects
 - Python 3 (for shader embedding during the build)
 - Vulkan headers, loader, and a working Vulkan driver
 - SPIR-V-enabled DXC (tested with v1.9.2607 on Linux)
-- Git (SDL3 and ImGui are fetched during the first configure)
+- Git (SDL3 are fetched during the first configure)
 
-On Ubuntu/Debian, the Vulkan development dependency is typically `libvulkan-dev`. SDL3 and ImGui do not need to be installed system-wide.
+On Ubuntu/Debian, the Vulkan development dependency is typically `libvulkan-dev`. SDL3 do not need to be installed system-wide.
 
 ## Build and run
 
@@ -21,7 +21,7 @@ cmake --build build -j
 ./build/pomelo
 ```
 
-The first configure needs internet access to fetch the pinned dependencies.
+The first configure needs internet access to fetch the pinned SDL3 dependency.
 CMake uses DXC to compile HLSL from `shaders/` to SPIR-V, then runs
 `deployment/embed_spirv.py` to generate C++ source files under `build/generated/Debug/`.
 Shader source or script changes regenerate those files automatically, which are compiled into `graphics`. The
@@ -43,24 +43,15 @@ where you leave it; there is no automatic rotation or panning.
 
 ## Simulation
 
-The default domain has 64³ cell-centered samples, with density increasing linearly from 0 to 1 along x.
-Density uses two R32 float 3D images; velocity uses two RGBA32 float 3D
-images. The initial velocity is a crossed periodic flow:
-`v = 0.5 * (sin(2*pi*qy), sin(2*pi*qx), 0)`, where q is normalized cell-center
-position within the domain. Each component makes one cycle across its transverse
-axis. The flow starts divergence-free but develops divergence under advection
-without pressure projection. Density retains its x ramp, including the periodic
-seam at the domain boundary.
+The default domain has 64³ cell-centered samples, initially at rest with no smoke.
+A source near the bottom injects density and heat. Each submitted frame advances
+one 1/60-second step: semi-Lagrangian advection, smoke injection and buoyancy,
+pressure solving, and velocity projection. The renderer displays the resulting density.
+Simulation speed depends on frame rate. Minimized windows pause stepping;
+window resizing preserves the simulation fields and camera.
 
-Each submitted frame advances one 1/60-second simulation step using backward
-semi-Lagrangian tracing and periodic trilinear interpolation, computes divergence
-of the new velocity, then renders that divergence. Simulation speed therefore depends on frame rate. Minimized windows
-pause stepping, and viewport resizing preserves the simulation images.
-
-The default density evolves over time. Density does not influence velocity. Buoyancy,
-pressure projection and density sources are not implemented. Velocity is advected
-using its previous value; without projection, general flows can develop divergence.
-Initial conditions and speed are defined in `src/graphics/initial_conditions.*`.
+Initial conditions are defined in `src/graphics/initial_conditions.*`, and emitter
+and buoyancy parameters in `src/graphics/smoke.*`.
 
 Run the numerical and GPU integration tests with:
 
@@ -76,13 +67,11 @@ flight with offscreen target resizing. GPU readback is restricted to tests.
 
 ## Source layout
 
-Project code builds as three libraries:
+Project code builds as two libraries:
 
-- `application`: application loop, frame sequencing, SDL window/event ownership,
-  and the Dear ImGui SDL adapter.
-- `chrome`: Dear ImGui context, composable panels, and UI interaction state.
+- `application`: application loop, frame sequencing, and SDL window/event ownership.
 - `graphics`: Vulkan setup, resource allocation, swapchain presentation, simulation
-  and rendering command recording, and the Dear ImGui Vulkan adapter.
+  and rendering command recording.
 
 Within `src/graphics`, `fields.*` owns simulation images and their current versions,
 `advection.*` records operations against borrowed fields, `volume_view.*`
@@ -95,14 +84,8 @@ owns the Vulkan object graph and submission. `initial_conditions.*` and
 `uniform_grid.*` hold field initialization and grid data utilities. These are
 focused source files within one library, not separate build targets.
 
-`imgui_core` and SDL remain third-party dependencies. `shaders/` contains HLSL
+SDL3 is fetched as a third-party dependency. `shaders/` contains HLSL
 sources and shared sampling helpers; `deployment/` contains build helpers.
 
-The single R32 float `divergence` image is recomputed after advection with periodic
-central differences `(v_plus - v_minus) / (2 * spacing)` on each matching component.
-`divergence.comp.hlsl` implements this diagnostic; it does not project velocity.
-The rendering panel selects Density or Divergence using radio buttons, with
-Divergence selected initially. Switching views preserves simulation and camera state. Negative divergence (compression) is
-blue, positive divergence (expansion) orange, and zero is transparent. Opacity
-scales with absolute divergence up to 1 inverse second. The default crossed sinusoidal flow starts at zero divergence and produces
-positive and negative regions after advection.
+The R32 float divergence image is recomputed with periodic central differences
+before the pressure solve and after projection as a diagnostic of the final velocity.

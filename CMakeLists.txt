@@ -45,27 +45,7 @@ set(SDL_X11_XSCRNSAVER OFF CACHE BOOL "" FORCE)
 set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(SDL)
 
-FetchContent_Declare(
-    imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG v1.92.9b
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(imgui)
-
-add_library(imgui_core STATIC
-    ${imgui_SOURCE_DIR}/imgui.cpp
-    ${imgui_SOURCE_DIR}/imgui_draw.cpp
-    ${imgui_SOURCE_DIR}/imgui_tables.cpp
-    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-)
-target_include_directories(imgui_core PUBLIC
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
-)
-
-# Project code is organized into application, chrome, and graphics libraries.
-# imgui_core and SDL are third-party dependencies.
+# Project code is organized into application and graphics libraries.
 add_library(graphics STATIC
     src/graphics/vulkan_backend.cpp
     src/graphics/volume_view.cpp
@@ -79,10 +59,9 @@ add_library(graphics STATIC
     src/graphics/advection.cpp
     src/graphics/initial_conditions.cpp
     src/graphics/uniform_grid.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
 target_include_directories(graphics PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(graphics PUBLIC Vulkan::Vulkan PRIVATE imgui_core SDL3::SDL3)
+target_link_libraries(graphics PUBLIC Vulkan::Vulkan PRIVATE SDL3::SDL3)
 
 set(advect_spirv ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/advect_comp.spv)
 set(advect_source ${CMAKE_CURRENT_BINARY_DIR}/generated/$<CONFIG>/advect_comp.cpp)
@@ -154,24 +133,12 @@ foreach(stage vert frag)
     target_sources(graphics PRIVATE ${source})
 endforeach()
 
-add_library(chrome STATIC
-    src/chrome/chrome.cpp
-    src/chrome/footer.cpp
-    src/chrome/viewport.cpp
-    src/chrome/simulation.cpp
-    src/chrome/rendering.cpp
-    src/chrome/panel.cpp
-)
-target_include_directories(chrome PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(chrome PRIVATE imgui_core)
-
 add_library(application STATIC
     src/application/application.cpp
     src/application/window.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
 )
 target_include_directories(application PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(application PRIVATE graphics chrome imgui_core SDL3::SDL3)
+target_link_libraries(application PRIVATE graphics SDL3::SDL3)
 
 add_executable(pomelo src/application/main.cpp)
 target_link_libraries(pomelo PRIVATE application)

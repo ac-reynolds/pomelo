@@ -1,5 +1,4 @@
 #include "application/application.hpp"
-#include "chrome/chrome.hpp"
 #include "application/window.hpp"
 #include "graphics/vulkan_backend.hpp"
 #include "graphics/initial_conditions.hpp"
@@ -15,50 +14,26 @@
 int application::run() {
     try {
         Window window;
-        {
-            chrome::Chrome chrome;
-            window.initialize_imgui_platform();
-            try {
-                const auto initial = simulation::smoke_initial_conditions();
-                graphics::VulkanBackend graphics(window.native_window(), initial);
-                chrome::ViewportState viewport{1, 1, false, false};
-                graphics::OrbitCamera camera;
-                bool running = true;
-                while (running) {
-                    running = window.poll_events();
-                    if (!running) break;
-                    if (window.minimized()) {
-                        window.delay(10);
-                        continue;
-                    }
-                    const graphics::Frame frame = graphics.begin_frame();
-                    if (!frame.valid) continue;
-                    const auto texture = graphics.prepare_viewport(frame, viewport.width, viewport.height);
-                    graphics.begin_imgui_frame();
-                    window.begin_imgui_frame();
-                    chrome.begin_frame();
-                    viewport = chrome.draw_layout({texture}, graphics.simulation_status());
-                    const chrome::DrawData draw_data = chrome.finalize_frame();
-                    constexpr float sensitivity = 0.005f; // Radians per logical screen pixel.
-                    camera.yaw = std::remainder(camera.yaw + viewport.orbit_dx * sensitivity,
-                                                2 * std::numbers::pi_v<float>);
-                    camera.pitch = std::clamp(camera.pitch + viewport.orbit_dy * sensitivity, -1.5f, 1.5f);
-                    if (texture) {
-                        const auto output = graphics.step_simulation(frame);
-                        const auto& field = chrome.display_field() == chrome::DisplayField::density
-                            ? output.density : output.pressure;
-                        graphics.render_volume(frame, field, camera);
-                    }
-                    graphics.render_imgui(draw_data.native, frame);
-                    graphics.end_frame(frame);
-                }
-                graphics.wait_idle();
-            } catch (...) {
-                window.shutdown_imgui_platform();
-                throw;
+        const auto initial = simulation::smoke_initial_conditions();
+        graphics::VulkanBackend graphics(window.native_window(), initial);
+        graphics::OrbitCamera camera;
+        float orbit_dx{}, orbit_dy{};
+        while (window.poll_events(orbit_dx, orbit_dy)) {
+            constexpr float sensitivity = 0.005f; // Radians per logical screen pixel.
+            camera.yaw = std::remainder(camera.yaw + orbit_dx * sensitivity,
+                                        2 * std::numbers::pi_v<float>);
+            camera.pitch = std::clamp(camera.pitch + orbit_dy * sensitivity, -1.5f, 1.5f);
+            if (window.minimized()) {
+                window.delay(10);
+                continue;
             }
-            window.shutdown_imgui_platform();
+            const auto frame = graphics.begin_frame();
+            if (!frame.valid) continue;
+            const auto output = graphics.step_simulation(frame);
+            graphics.render_volume(frame, output.density, camera);
+            graphics.end_frame(frame);
         }
+        graphics.wait_idle();
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "pomelo: %s\n", error.what());
