@@ -10,6 +10,7 @@ struct Parameters {
     float cooling;
     float dissipation;
     float buoyancy;
+    uint phases;
 };
 [[vk::push_constant]] ConstantBuffer<Parameters> parameters;
 [[vk::binding(0, 0)]] RWTexture3D<float> density;
@@ -24,10 +25,16 @@ void main(uint3 i : SV_DispatchThreadID) {
     float w = max(0.0, 1.0 - dot(offset, offset));
     w *= w;
     float dt = parameters.dt;
-    float rho = min(1.0, density[i] * exp(-parameters.dissipation * dt) + dt * parameters.density_rate * w);
-    float theta = temperature[i] * exp(-parameters.cooling * dt) + dt * parameters.heat_rate * w;
+    float rho = density[i];
+    float theta = temperature[i];
+    if (parameters.phases & 1) {
+        rho *= exp(-parameters.dissipation * dt);
+        theta *= exp(-parameters.cooling * dt);
+    }
+    rho = min(1.0, rho + dt * parameters.density_rate * w);
+    theta += dt * parameters.heat_rate * w;
     float3 v = velocity[i].xyz;
-    v.y += dt * parameters.buoyancy * theta;
+    if (parameters.phases & 2) v.y += dt * parameters.buoyancy * theta;
     density[i] = rho;
     temperature[i] = theta;
     velocity[i] = float4(v, 0.0);

@@ -136,6 +136,7 @@ endforeach()
 add_library(application STATIC
     src/application/application.cpp
     src/application/window.cpp
+    src/application/input_deck.cpp
 )
 target_include_directories(application PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(application PRIVATE graphics SDL3::SDL3)
@@ -151,6 +152,9 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(input_deck_test tests/input_deck_test.cpp)
+    target_link_libraries(input_deck_test PRIVATE application)
+    add_test(NAME input_deck COMMAND input_deck_test ${CMAKE_CURRENT_SOURCE_DIR}/inputs)
     add_executable(uniform_grid_test tests/uniform_grid_test.cpp)
     target_link_libraries(uniform_grid_test PRIVATE graphics)
     add_test(NAME uniform_grid COMMAND uniform_grid_test)

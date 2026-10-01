@@ -71,7 +71,7 @@ float4 main(VolumeVaryings input) : SV_Target0 {
         back_grid = face_grid(origin + direction * exit_distance, float3(dimensions));
     }
     const float3 grid_color = float3(0.45, 0.55, 0.65);
-    float3 rear = lerp(background, grid_color, 0.3 * back_grid);
+    float3 rear = lerp(background, grid_color, transform.forward.w * back_grid);
     float3 accumulated = 0.0;
     float transmittance = 1.0;
     // Uniform half-spacing intervals; integrate the final partial interval exactly.
@@ -87,5 +87,5 @@ float4 main(VolumeVaryings input) : SV_Target0 {
         if (transmittance < 0.001) break;
     }
     float3 color = accumulated + transmittance * rear;
-    return float4(lerp(color, grid_color, 0.65 * front_grid), 1.0);
+    return float4(lerp(color, grid_color, transform.forward.w * front_grid), 1.0);
 }

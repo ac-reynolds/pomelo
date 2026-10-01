@@ -160,9 +160,15 @@ void source_updates(Context& c) {
         simulation::create_smoke(source,c.physical,c.device,fields);
         auto p=simulation::smoke_parameters(fields.domain);
         p.density_rate=20;
-        for (unsigned mode=0;mode<4;++mode) {
+        for (unsigned mode=0;mode<8;++mode) {
             const float dt=mode==0 ? 0 : 0.2f;
-            p.enabled=mode==1;
+            p.enabled=mode==1 || mode>=4;
+            std::vector<std::array<float,3>> centers{p.center};
+            if (mode==4) {
+                centers={p.center,p.center}; centers[0][0]-=0.5f; centers[1][0]+=0.5f;
+            } else if (mode==5) centers={p.center,p.center}; // Exactly overlapping sources.
+            else if (mode==6) centers.clear();
+            else if (mode==7) { centers.push_back(p.center); centers[1][0]+=0.25f; }
             const float initial_heat=mode==3 ? 0.0f : 2.0f;
             std::fill(initial.temperature.begin(),initial.temperature.end(),initial_heat);
             // Reset both destinations so every case has independently known input.
@@ -182,8 +188,15 @@ void source_updates(Context& c) {
                 try { simulation::record_smoke(source,slot.command,step,invalid); }
                 catch (const std::invalid_argument&) { rejected=true; }
                 require(rejected,"Invalid emitter radius accepted");
+                auto invalid_centers=centers; invalid_centers.push_back(p.center);
+                invalid_centers.back()[2]=std::numeric_limits<float>::quiet_NaN();
+                rejected=false;
+                try { simulation::record_smoke(source,slot.command,step,p,invalid_centers); }
+                catch (const std::invalid_argument&) { rejected=true; }
+                require(rejected,"Invalid application source accepted");
             }
-            simulation::record_smoke(source,slot.command,step,p);
+            if (mode<4) simulation::record_smoke(source,slot.command,step,p);
+            else simulation::record_smoke(source,slot.command,step,p,centers);
             submit(c,slot); simulation::commit_step(fields,step);
             auto rho=read_image(c,simulation::current_density(fields).image,extent,1,VK_IMAGE_LAYOUT_GENERAL);
             auto theta=read_image(c,simulation::current_temperature(fields).image,extent,1,VK_IMAGE_LAYOUT_GENERAL);
@@ -195,7 +208,12 @@ void source_updates(Context& c) {
                 double r2=0;
                 for (unsigned a=0;a<3;++a) r2+=std::pow((pos[a]-p.center[a])/p.radius,2);
                 interior|=r2<1; exterior|=r2>=1;
-                double w=p.enabled ? std::pow(std::max(0.0,1-r2),2) : 0;
+                double w=0;
+                for (const auto& center:centers) {
+                    double distance=0;
+                    for (unsigned a=0;a<3;++a) distance+=std::pow((pos[a]-center[a])/p.radius,2);
+                    if (p.enabled) w+=std::pow(std::max(0.0,1-distance),2);
+                }
                 const double expected_rho=std::min(1.0,0.8f*std::exp(-double(p.dissipation)*dt)+dt*p.density_rate*w);
                 const double expected_theta=initial_heat*std::exp(-double(p.cooling)*dt)+dt*p.heat_rate*w;
                 saturated|=expected_rho==1;
@@ -205,7 +223,7 @@ void source_updates(Context& c) {
                 require(velocity[4*i]==0.3f && velocity[4*i+2]==0.1f && velocity[4*i+3]==0,"Source changed other velocity components");
             }
             require(interior && exterior,"Source coverage incomplete");
-            if (dt>0 && p.enabled) require(saturated,"Source saturation not exercised");
+            if (dt>0 && p.enabled && !centers.empty()) require(saturated,"Source saturation not exercised");
         }
         cleanup();
     } catch (...) { cleanup(); throw; }

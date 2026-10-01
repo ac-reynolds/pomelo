@@ -12,8 +12,9 @@ struct Parameters {
     std::array<float, 3> origin; float spacing;
     std::array<float, 3> center; float radius;
     float density_rate, heat_rate, cooling, dissipation, buoyancy;
+    uint32_t phases; // Bit 0: decay before injection; bit 1: buoyancy after injection.
 };
-static_assert(sizeof(Parameters) == 68 && offsetof(Parameters, center) == 32 &&
+static_assert(sizeof(Parameters) == 72 && offsetof(Parameters, center) == 32 &&
     offsetof(Parameters, density_rate) == 48 && offsetof(Parameters, buoyancy) == 64);
 void validate(const graphics::FieldDomain& domain, const simulation::SmokeParameters& p) {
     if (!std::isfinite(domain.spacing) || domain.spacing <= 0 ||
@@ -139,6 +140,12 @@ void simulation::destroy_smoke(Smoke& sim, VkDevice device) {
 
 void simulation::record_smoke(const Smoke& sim, VkCommandBuffer command,
     const AdvectionStep& step, const SmokeParameters& p) {
+    record_smoke(sim, command, step, p, std::span(&p.center, 1));
+}
+
+void simulation::record_smoke(const Smoke& sim, VkCommandBuffer command,
+    const AdvectionStep& step, const SmokeParameters& p,
+    std::span<const std::array<float, 3>> sources) {
     const uint32_t destination = graphics::same_field_binding(step.output, sim.density[0]) ? 0 : 1;
     if (!graphics::same_field_binding(step.output, sim.density[destination]) ||
         !graphics::same_field_binding(step.velocity_output, sim.velocity[destination]) ||
@@ -146,6 +153,11 @@ void simulation::record_smoke(const Smoke& sim, VkCommandBuffer command,
         step.output.version != step.velocity_output.version || step.output.version != step.temperature_output.version)
         throw std::invalid_argument("Smoke requires matching destination bindings and versions");
     validate(step.output.domain, p);
+    for (const auto& center : sources) {
+        auto source = p;
+        source.center = center;
+        validate(step.output.domain, source);
+    }
     if (!std::isfinite(step.dt) || step.dt < 0) throw std::invalid_argument("Invalid smoke timestep");
     if (step.dt == 0) return;
     const std::array images{step.output.image.image, step.velocity_output.image.image, step.temperature_output.image.image};
@@ -160,17 +172,24 @@ void simulation::record_smoke(const Smoke& sim, VkCommandBuffer command,
         barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     }
-    // Includes the advection writes and earlier frame readers of these images.
-    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 3, barriers.data());
     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, sim.pipeline);
     vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, sim.layout, 0, 1, &sim.sets[destination], 0, nullptr);
     const auto& domain = step.output.domain;
-    const Parameters parameters{domain.dimensions, step.dt, domain.origin, domain.spacing, p.center, p.radius,
-        p.enabled ? p.density_rate : 0, p.enabled ? p.heat_rate : 0, p.cooling, p.dissipation, p.buoyancy};
-    vkCmdPushConstants(command, sim.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(parameters), &parameters);
     const auto n = domain.dimensions;
-    vkCmdDispatch(command, (n[0]+3)/4, (n[1]+3)/4, (n[2]+3)/4);
+    const size_t dispatches = std::max(size_t{1}, sources.size());
+    for (size_t i = 0; i < dispatches; ++i) {
+        // Order advection, previous readers, and overlapping source updates.
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 3, barriers.data());
+        const bool inject = p.enabled && !sources.empty();
+        const uint32_t phases = (i == 0 ? 1u : 0u) | (i + 1 == dispatches ? 2u : 0u);
+        const Parameters parameters{domain.dimensions, step.dt, domain.origin, domain.spacing,
+            sources.empty() ? p.center : sources[i], p.radius,
+            inject ? p.density_rate : 0, inject ? p.heat_rate : 0,
+            p.cooling, p.dissipation, p.buoyancy, phases};
+        vkCmdPushConstants(command, sim.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(parameters), &parameters);
+        vkCmdDispatch(command, (n[0]+3)/4, (n[1]+3)/4, (n[2]+3)/4);
+    }
     for (auto& barrier : barriers) {
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;

@@ -4,9 +4,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
+#include <array>
 #include <string_view>
 
-namespace simulation { struct InitialConditions; }
+namespace simulation { struct InitialConditions; struct SmokeParameters; }
 
 namespace graphics { // Shared Vulkan, simulation, and visualization facilities.
 
@@ -23,7 +25,8 @@ struct Frame {
 // resources are destroyed before their device/instance.
 class VulkanBackend {
 public:
-    VulkanBackend(void* native_window, const simulation::InitialConditions& initial);
+    VulkanBackend(void* native_window, const simulation::InitialConditions& initial,
+                  const simulation::SmokeParameters&, std::span<const std::array<float, 3>> sources);
     ~VulkanBackend();
     VulkanBackend(VulkanBackend&&) = delete;
     VulkanBackend& operator=(VulkanBackend&&) = delete;
@@ -33,7 +36,7 @@ public:
     [[nodiscard]] std::string_view simulation_status() const;
     [[nodiscard]] Frame begin_frame();
     [[nodiscard]] SimulationOutput step_simulation(Frame frame);
-    void render_volume(Frame frame, const FieldView& field, const OrbitCamera& camera);
+    void render_volume(Frame frame, const FieldView& field, const OrbitCamera& camera, float domain_box_opacity);
     void end_frame(Frame frame);
     void wait_idle();
 

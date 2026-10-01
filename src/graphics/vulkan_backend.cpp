@@ -69,6 +69,7 @@ struct VulkanContext {
     simulation::Advection simulation;
     simulation::Smoke smoke;
     simulation::SmokeParameters smoke_parameters;
+    std::vector<std::array<float, 3>> sources;
     bool step_recorded{};
     bool swapchain_dirty{};
 
@@ -357,7 +358,8 @@ struct graphics::VulkanBackend::Impl {
     VulkanContext vk;
 };
 
-graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::InitialConditions& initial) : impl_(std::make_unique<Impl>()) {
+graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::InitialConditions& initial,
+    const simulation::SmokeParameters& smoke_parameters, std::span<const std::array<float, 3>> sources) : impl_(std::make_unique<Impl>()) {
     impl_->window = static_cast<SDL_Window*>(native_window);
     try {
         impl_->vk.create(impl_->window);
@@ -367,7 +369,8 @@ graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::In
         simulation::create_advection(vk.simulation, vk.physical_device, vk.device, fields, {simulation::velocity_view(vk.fields, 0, 0), simulation::velocity_view(vk.fields, 1, 0)},
             {simulation::temperature_view(vk.fields, 0, 0), simulation::temperature_view(vk.fields, 1, 0)});
         simulation::create_smoke(vk.smoke, vk.physical_device, vk.device, vk.fields);
-        vk.smoke_parameters = simulation::smoke_parameters(vk.fields.domain);
+        vk.smoke_parameters = smoke_parameters;
+        vk.sources.assign(sources.begin(), sources.end());
         create_volume_pipeline(vk.volume_pipeline, vk.physical_device, vk.device);
         const auto divergence = simulation::divergence_view(vk.fields, 0);
         simulation::create_divergence(vk.divergence, vk.physical_device, vk.device,
@@ -398,7 +401,7 @@ graphics::SimulationOutput graphics::VulkanBackend::step_simulation(Frame token)
     if (vk.step_recorded) throw std::logic_error("Simulation already recorded for this frame");
     vk.pending_step = simulation::prepare_advection(vk.fields);
     simulation::record_advection(vk.simulation, vk.frames[token.frame_index].command_buffer, vk.pending_step);
-    simulation::record_smoke(vk.smoke, vk.frames[token.frame_index].command_buffer, vk.pending_step, vk.smoke_parameters);
+    simulation::record_smoke(vk.smoke, vk.frames[token.frame_index].command_buffer, vk.pending_step, vk.smoke_parameters, vk.sources);
     simulation::record_divergence(vk.divergence, vk.frames[token.frame_index].command_buffer, vk.pending_step.velocity_output);
     const auto pressure = simulation::record_pressure(vk.pressure, vk.frames[token.frame_index].command_buffer,
         vk.pending_step.dt, vk.pending_step.output.version, token.frame_index);
@@ -410,7 +413,7 @@ graphics::SimulationOutput graphics::VulkanBackend::step_simulation(Frame token)
     return {vk.pending_step.output, pressure};
 }
 
-void graphics::VulkanBackend::render_volume(Frame token, const FieldView& field, const OrbitCamera& camera) {
+void graphics::VulkanBackend::render_volume(Frame token, const FieldView& field, const OrbitCamera& camera, float domain_box_opacity) {
     auto& vk = impl_->vk;
     auto& frame = vk.frames[token.frame_index];
     if (frame.target.extent.width != vk.extent.width || frame.target.extent.height != vk.extent.height) {
@@ -421,13 +424,13 @@ void graphics::VulkanBackend::render_volume(Frame token, const FieldView& field,
     }
     for (const auto& view : vk.pressure_views) {
         if (same_field_binding(view.field, field)) {
-            record_volume_view(view, frame.target, frame.command_buffer, camera, true);
+            record_volume_view(view, frame.target, frame.command_buffer, camera, domain_box_opacity);
             return;
         }
     }
     for (const auto& view : vk.density_views) {
         if (same_field_binding(view.field, field)) {
-            record_volume_view(view, frame.target, frame.command_buffer, camera, true);
+            record_volume_view(view, frame.target, frame.command_buffer, camera, domain_box_opacity);
             return;
         }
     }

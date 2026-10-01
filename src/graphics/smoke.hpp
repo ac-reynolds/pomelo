@@ -1,9 +1,10 @@
 #pragma once
 #include "graphics/advection.hpp"
+#include <span>
 
 namespace simulation {
 struct SmokeParameters {
-    std::array<float, 3> center{}; // World-space center; +Y is up.
+    std::array<float, 3> center{}; // Default center for the single-source overload. // World-space center; +Y is up.
     float radius{};
     // Rates are per simulated second; buoyancy is acceleration per heat unit.
     float density_rate = 3.0f;
@@ -26,4 +27,8 @@ void create_smoke(Smoke&, VkPhysicalDevice, VkDevice, const SimulationFields&);
 void destroy_smoke(Smoke&, VkDevice);
 // Updates only the advection destinations, before divergence and projection.
 void record_smoke(const Smoke&, VkCommandBuffer, const AdvectionStep&, const SmokeParameters&);
+// Cooling/dissipation and buoyancy run once per step, even for zero sources.
+// Sources are supplied by the caller and may overlap additively.
+void record_smoke(const Smoke&, VkCommandBuffer, const AdvectionStep&, const SmokeParameters&,
+                  std::span<const std::array<float, 3>> sources);
 }

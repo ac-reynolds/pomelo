@@ -217,7 +217,9 @@ void graphics::destroy_volume_view(VolumeView& view, VkDevice device) {
 }
 
 void graphics::record_volume_view(const VolumeView& view, const RenderTarget& target,
-                                 VkCommandBuffer command_buffer, const OrbitCamera& camera, bool show_domain_grid) {
+                                 VkCommandBuffer command_buffer, const OrbitCamera& camera, float domain_box_opacity) {
+    if (!std::isfinite(domain_box_opacity) || domain_box_opacity < 0 || domain_box_opacity > 1)
+        throw std::invalid_argument("Domain box opacity must be between zero and one");
     const auto& pipeline = *view.pipeline;
     const auto& grid = view.field.domain;
     std::array<float, 4> origin_spacing{};
@@ -251,7 +253,7 @@ void graphics::record_volume_view(const VolumeView& view, const RenderTarget& ta
          center[2] + distance * back[2], view.signed_values ? 1.0f / view.signed_scale : 0.0f},
         {right[0] * tangent * aspect, right[1] * tangent * aspect, right[2] * tangent * aspect, 0},
         {up[0] * tangent, up[1] * tangent, up[2] * tangent, 0},
-        {-back[0], -back[1], -back[2], show_domain_grid ? 1.0f : 0.0f},
+        {-back[0], -back[1], -back[2], domain_box_opacity},
         {origin_spacing[0], origin_spacing[1], origin_spacing[2], origin_spacing[3]}};
     std::array<VkClearValue, 2> clear{};
     clear[0].color = {{0.055f, 0.065f, 0.085f, 1.0f}};

@@ -43,6 +43,45 @@ where you leave it; there is no automatic rotation or panning. All six faces of 
 domain box show a grid with eight divisions per axis. Rear-face lines fade behind
 the smoke. The grid shares the volume draw and the frame command buffer.
 
+## Input decks
+
+Supply a JSON deck as the optional first argument:
+
+```sh
+./build/pomelo inputs/twin_plumes.json
+```
+
+```json
+{
+  "domain_box_opacity": 0.45,
+  "sources": [
+    { "x": -0.35, "y": -0.85, "z": 0.0 },
+    { "x": 0.35, "y": -0.85, "z": 0.0 }
+  ]
+}
+```
+
+Both fields are required. Opacity ranges from zero (hidden) to one (opaque grid
+lines), without changing smoke opacity. Source centers use world coordinates,
+with positive Y upward; the default domain spans `[-1, 1]` on each axis. The whole
+emitter must fit inside the box. A deck replaces the built-in source list; an
+empty list disables injection. Multiple sources add density and heat, with
+cooling, dissipation, and buoyancy applied once per step.
+
+JSON comments, trailing commas, duplicate keys, and unknown fields are rejected.
+Invalid decks stop startup with a field-specific error. The application loads
+and validates the deck before creating the window or GPU resources, then passes
+sources to the simulator. No new library dependency is needed. Running without
+a deck keeps the default single source. See `plans/input_format.md` for the spec.
+
+| Deck | Setup |
+| --- | --- |
+| `inputs/twin_plumes.json` | Two separated plumes |
+| `inputs/ring.json` | Six emitters in a ring |
+| `inputs/staggered.json` | Three emitters at different heights and depths |
+| `inputs/smoke_only.json` | Two overlapping emitters with the box hidden |
+| `inputs/empty_box.json` | Fully visible box with no smoke injection |
+
 ## Simulation
 
 The default domain has 64³ cell-centered samples, initially at rest with no smoke.
@@ -52,8 +91,9 @@ pressure solving, and velocity projection. The renderer displays the resulting d
 Simulation speed depends on frame rate. Minimized windows pause stepping;
 window resizing preserves the simulation fields and camera.
 
-Initial conditions are defined in `src/graphics/initial_conditions.*`, and emitter
-and buoyancy parameters in `src/graphics/smoke.*`.
+Initial conditions are defined in `src/graphics/initial_conditions.*`, and default emitter
+and buoyancy parameters in `src/graphics/smoke.*`. Source locations supplied by
+the application override the default emitter center.
 
 Run the numerical and GPU integration tests with:
 
