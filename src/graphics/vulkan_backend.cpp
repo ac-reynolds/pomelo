@@ -421,13 +421,13 @@ void graphics::VulkanBackend::render_volume(Frame token, const FieldView& field,
     }
     for (const auto& view : vk.pressure_views) {
         if (same_field_binding(view.field, field)) {
-            record_volume_view(view, frame.target, frame.command_buffer, camera);
+            record_volume_view(view, frame.target, frame.command_buffer, camera, true);
             return;
         }
     }
     for (const auto& view : vk.density_views) {
         if (same_field_binding(view.field, field)) {
-            record_volume_view(view, frame.target, frame.command_buffer, camera);
+            record_volume_view(view, frame.target, frame.command_buffer, camera, true);
             return;
         }
     }

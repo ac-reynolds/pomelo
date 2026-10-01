@@ -190,6 +190,38 @@ void run(Context& c, const char* name, const simulation::InitialConditions& init
             require(std::memcmp(pixels[0].data(), pixels[1].data(), pixels[0].size()*sizeof(float)) != 0,
                     "Renderer did not distinguish old and new density images");
         }
+        if (std::strcmp(name, "integer periodic shift") == 0) {
+            auto& slot = c.slots[0];
+            vkDeviceWaitIdle(c.device);
+            graphics::destroy_render_target(slot.target, c.device);
+            graphics::create_render_target(slot.target,
+                {pipeline.render_pass, pipeline.color_format, pipeline.depth_format},
+                c.physical, c.device, {96, 96});
+            // Look toward every face, exercising both signs of each box axis.
+            const graphics::OrbitCamera cameras[] = {
+                {0, 0}, {1.5707963f, 0}, {3.1415927f, 0}, {4.7123890f, 0},
+                {0, 1.3f}, {0, -1.3f}};
+            for (const auto& camera : cameras) {
+                std::array<std::vector<float>, 2> images;
+                for (unsigned grid = 0; grid < 2; ++grid) {
+                    begin(c, slot);
+                    graphics::record_volume_view(volume_views[0], slot.target, slot.command, camera, grid != 0);
+                    submit(c, slot);
+                    images[grid] = read_image(c, slot.target.color, {96, 96, 1}, 1,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                }
+                const auto* plain = reinterpret_cast<const unsigned char*>(images[0].data());
+                const auto* gridded = reinterpret_cast<const unsigned char*>(images[1].data());
+                unsigned changed = 0;
+                for (unsigned pixel = 0; pixel < 96 * 96; ++pixel) {
+                    changed += std::memcmp(plain + 4 * pixel, gridded + 4 * pixel, 3) != 0;
+                    require(gridded[4 * pixel + 3] == 255, "Domain grid changed output opacity");
+                }
+                require(changed > 50, "Domain face grid is missing from a camera direction");
+                require(std::memcmp(plain, gridded, 4) == 0,
+                        "Domain grid leaked outside the box silhouette");
+            }
+        }
         const double mass = std::accumulate(actual.begin(), actual.end(), 0.0);
         const double initial_mass = std::accumulate(initial.density.values.begin(), initial.density.values.end(), 0.0);
         std::printf("%s: %u steps, max error %.3g, mass drift %.3g, velocity error %.3g\n", name, steps, error, mass-initial_mass, velocity_error);

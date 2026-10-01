@@ -39,7 +39,9 @@ python3 deployment/embed_spirv.py build/generated/Debug/cube_vert.spv /tmp/cube_
 ```
 
 Left-click and drag in the viewport to orbit around the volume. The camera stays
-where you leave it; there is no automatic rotation or panning.
+where you leave it; there is no automatic rotation or panning. All six faces of the
+domain box show a grid with eight divisions per axis. Rear-face lines fade behind
+the smoke. The grid shares the volume draw and the frame command buffer.
 
 ## Simulation
 

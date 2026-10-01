@@ -27,6 +27,20 @@ float4 transfer(float value) {
     return float4(color, 0.18 * smoothstep(0.25, 0.9, value));
 }
 
+// Antialiased grid on whichever of the six domain faces contains this point.
+// Eight divisions per axis keep the box readable independently of resolution.
+float face_grid(float3 position, float3 dimensions) {
+    float3 face_distance = min(abs(position), abs(position - dimensions));
+    uint normal = face_distance.x <= face_distance.y && face_distance.x <= face_distance.z
+        ? 0 : (face_distance.y <= face_distance.z ? 1 : 2);
+    float3 coordinates = position / dimensions * 8.0;
+    float3 distance_to_line = abs(coordinates - round(coordinates));
+    float3 pixel_width = max(fwidth(coordinates), 1e-5);
+    float3 coverage = 1.0 - smoothstep(0.5, 1.5, distance_to_line / pixel_width);
+    coverage[normal] = 0.0; // The face's constant coordinate is not a grid line.
+    return max(coverage.x, max(coverage.y, coverage.z));
+}
+
 float4 main(VolumeVaryings input) : SV_Target0 {
     const float3 background = float3(0.055, 0.065, 0.085);
     uint width, height, depth;
@@ -50,6 +64,14 @@ float4 main(VolumeVaryings input) : SV_Target0 {
             exit_distance = min(exit_distance, max(a, b));
         }
     }
+    if (exit_distance <= entry) return float4(background, 1.0);
+    float front_grid = 0.0, back_grid = 0.0;
+    if (transform.forward.w > 0.0) {
+        front_grid = face_grid(origin + direction * entry, float3(dimensions));
+        back_grid = face_grid(origin + direction * exit_distance, float3(dimensions));
+    }
+    const float3 grid_color = float3(0.45, 0.55, 0.65);
+    float3 rear = lerp(background, grid_color, 0.3 * back_grid);
     float3 accumulated = 0.0;
     float transmittance = 1.0;
     // Uniform half-spacing intervals; integrate the final partial interval exactly.
@@ -64,5 +86,6 @@ float4 main(VolumeVaryings input) : SV_Target0 {
         transmittance *= 1.0 - alpha;
         if (transmittance < 0.001) break;
     }
-    return float4(accumulated + transmittance * background, 1.0);
+    float3 color = accumulated + transmittance * rear;
+    return float4(lerp(color, grid_color, 0.65 * front_grid), 1.0);
 }
