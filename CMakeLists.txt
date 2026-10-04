@@ -6,6 +6,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(POMELO_BUILD_PYTHON "Build the Python extension" OFF)
+if(POMELO_BUILD_PYTHON)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 include(FetchContent)
 
 find_package(Vulkan REQUIRED)
@@ -136,6 +140,7 @@ endforeach()
 add_library(application STATIC
     src/application/application.cpp
     src/application/window.cpp
+    src/application/settings.cpp
     src/application/input_deck.cpp
 )
 target_include_directories(application PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -168,4 +173,8 @@ if(BUILD_TESTING)
     target_link_libraries(projection_test PRIVATE graphics)
     add_test(NAME projection COMMAND projection_test)
     set_tests_properties(advection pressure projection PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+if(POMELO_BUILD_PYTHON)
+    add_subdirectory(python)
 endif()

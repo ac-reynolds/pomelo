@@ -1,0 +1,20 @@
+[build-system]
+requires = ["scikit-build-core==0.12.2", "nanobind==2.12.0"]
+build-backend = "build_backend"
+backend-path = ["."]
+
+[project]
+name = "pomelo"
+version = "0.1.0"
+description = "Python configuration for the native Pomelo smoke simulator"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.scikit-build]
+minimum-version = "0.12"
+cmake.source-dir = ".."
+cmake.args = ["-DPOMELO_BUILD_PYTHON=ON", "-DBUILD_TESTING=OFF"]
+wheel.packages = ["pomelo"]
+install.components = ["python"]
+build.targets = ["_native"]
+sdist.include = ["CMakeLists.txt", "src/**", "shaders/**", "deployment/**", "tests/**", "inputs/**", "python/**"]

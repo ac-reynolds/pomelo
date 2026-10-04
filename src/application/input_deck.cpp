@@ -1,5 +1,4 @@
 #include "application/input_deck.hpp"
-#include "graphics/smoke.hpp"
 
 #include <charconv>
 #include <cmath>
@@ -200,24 +199,4 @@ application::InputDeck application::load_input_deck(std::string_view filename) {
     if (file.bad()) throw std::runtime_error(std::string(filename) + ": cannot read input deck");
     try { return parse_input_deck(text); }
     catch (const std::invalid_argument& e) { throw std::invalid_argument(std::string(filename) + ": " + e.what()); }
-}
-
-application::InputDeck application::default_input_deck(const graphics::FieldDomain& domain) {
-    return {0.65f, {simulation::smoke_parameters(domain).center}};
-}
-
-void application::validate_input_deck(const InputDeck& deck, const graphics::FieldDomain& domain) {
-    if (!std::isfinite(deck.domain_box_opacity) || deck.domain_box_opacity < 0 || deck.domain_box_opacity > 1)
-        throw std::invalid_argument("domain_box_opacity: must be a finite number between 0 and 1");
-    const double radius = simulation::smoke_parameters(domain).radius;
-    for (size_t i = 0; i < deck.sources.size(); ++i) {
-        for (size_t axis = 0; axis < 3; ++axis) {
-            const double coordinate = deck.sources[i][axis];
-            const double minimum = domain.origin[axis], maximum = minimum + double(domain.dimensions[axis]) * domain.spacing;
-            const std::string path = "sources[" + std::to_string(i) + "]." + "xyz"[axis];
-            if (!std::isfinite(coordinate)) throw std::invalid_argument(path + ": coordinate must be finite");
-            if (coordinate - radius < minimum || coordinate + radius > maximum)
-                throw std::invalid_argument(path + ": emitter extends beyond the domain");
-        }
-    }
 }

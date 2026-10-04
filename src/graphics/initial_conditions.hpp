@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics/uniform_grid.hpp"
+#include "graphics/field_view.hpp"
 #include <array>
 #include <vector>
 
@@ -15,7 +16,8 @@ struct InitialConditions {
 // where q is normalized position in the domain. Speed is the component amplitude.
 InitialConditions initial_conditions(std::array<uint32_t, 3> dimensions = {64, 64, 64},
     std::array<float, 3> origin = {-1, -1, -1}, float spacing = 2.0f / 64, float speed = 0.5f);
-InitialConditions smoke_initial_conditions(std::array<uint32_t, 3> dimensions = {64, 64, 64},
-    std::array<float, 3> origin = {-1, -1, -1}, float spacing = 2.0f / 64);
+constexpr graphics::FieldDomain smoke_domain() { return {{64, 64, 64}, {-1, -1, -1}, 2.0f / 64}; }
+InitialConditions smoke_initial_conditions(std::array<uint32_t, 3> dimensions = smoke_domain().dimensions,
+    std::array<float, 3> origin = smoke_domain().origin, float spacing = smoke_domain().spacing);
 void validate_initial_conditions(const InitialConditions&);
 }

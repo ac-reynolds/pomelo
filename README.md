@@ -82,6 +82,21 @@ a deck keeps the default single source. See `plans/input_format.md` for the spec
 | `inputs/smoke_only.json` | Two overlapping emitters with the box hidden |
 | `inputs/empty_box.json` | Fully visible box with no smoke injection |
 
+## Python API
+
+Configure and launch the same native simulator directly from Python:
+
+```sh
+python -m pip install ./python
+python python/examples/twin_plumes.py
+```
+
+The API exports `Settings`, `default_settings()`, and blocking `run(settings)`.
+Invalid settings raise exceptions before graphics startup. Python bindings,
+packaging, tests, and examples live under `python/`; the standalone C++ build
+does not enable the optional `POMELO_BUILD_PYTHON` target by default. See the
+[Python README](python/README.md) for the API contract and test commands.
+
 ## Simulation
 
 The default domain has 64³ cell-centered samples, initially at rest with no smoke.

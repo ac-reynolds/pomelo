@@ -6,6 +6,7 @@
 #include "graphics/initial_conditions.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <numbers>
 #include <cstdio>
@@ -13,18 +14,25 @@
 #include <exception>
 #include <stdexcept>
 
-int application::run(std::string_view input_filename) {
+namespace {
+std::atomic_flag active_run = ATOMIC_FLAG_INIT;
+}
+
+void application::run(const Settings& settings, void (*poll_hook)()) {
+    const auto deck = settings;
+    const auto domain = simulation::smoke_domain();
+    validate_settings(deck, domain);
+    if (active_run.test_and_set()) throw std::runtime_error("A simulation is already running");
     try {
         const auto initial = simulation::smoke_initial_conditions();
-        const graphics::FieldDomain domain{initial.density.dimensions, initial.density.origin, initial.density.spacing};
-        const auto deck = input_filename.empty() ? default_input_deck(domain) : load_input_deck(input_filename);
-        validate_input_deck(deck, domain);
         const auto smoke_parameters = simulation::smoke_parameters(domain);
         Window window;
         graphics::VulkanBackend graphics(window.native_window(), initial, smoke_parameters, deck.sources);
         graphics::OrbitCamera camera;
         float orbit_dx{}, orbit_dy{};
-        while (window.poll_events(orbit_dx, orbit_dy)) {
+        while (true) {
+            if (poll_hook) poll_hook();
+            if (!window.poll_events(orbit_dx, orbit_dy)) break;
             constexpr float sensitivity = 0.005f; // Radians per logical screen pixel.
             camera.yaw = std::remainder(camera.yaw + orbit_dx * sensitivity,
                                         2 * std::numbers::pi_v<float>);
@@ -40,6 +48,16 @@ int application::run(std::string_view input_filename) {
             graphics.end_frame(frame);
         }
         graphics.wait_idle();
+    } catch (...) {
+        active_run.clear();
+        throw;
+    }
+    active_run.clear();
+}
+
+int application::run(std::string_view input_filename) {
+    try {
+        run(input_filename.empty() ? default_settings() : load_input_deck(input_filename));
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "pomelo: %s\n", error.what());
