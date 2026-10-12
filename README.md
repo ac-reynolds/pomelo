@@ -38,6 +38,8 @@ The embedding script can also be run independently:
 python3 deployment/embed_spirv.py build/generated/Debug/cube_vert.spv /tmp/cube_vert.cpp --symbol cube_vert_spirv --header graphics/shaders.hpp
 ```
 
+A Makefile wrapper is also provided for convenience (`make run`).
+
 Left-click and drag in the viewport to orbit around the volume. The camera stays
 where you leave it; there is no automatic rotation or panning. All six faces of the
 domain box show a grid with eight divisions per axis. Rear-face lines fade behind
