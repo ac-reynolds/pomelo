@@ -2,6 +2,25 @@
 
 A C++20 smoke and single-phase flow visualizer using SDL3 and Vulkan. Compute shaders evolve a density/tracer field, temperature, and velocity, and a full-window ray marcher renders the scalar field.
 
+## Flow previews
+
+![Double shear-layer evolution from step 0 to step 360](docs/screenshots/double_shear_layer-timelapse.gif)
+
+**Double shear layer:** a looping timelapse of seven native Vulkan captures,
+sampled every **60 steps / 1 simulated second**, from step 0 to 360 (0–6 simulated
+seconds). Each snapshot is held for one second; there are no interpolated
+frames. The GIF is resized to 640×480 and palette-encoded. The later softening
+reflects numerical diffusion in the existing solver.
+
+![Taylor–Green dye sheets after 60 simulation steps](docs/screenshots/taylor_green-evolved.png)
+
+**Taylor–Green:** folding passive-dye sheets after **60 steps / 1 simulated
+second**, shown in an unmodified native-renderer capture.
+
+Both previews use the 64³ periodic single-phase solver with 512 pressure
+iterations. See [all three demos, full-resolution stills, and reproduction
+commands](docs/captures.md) and [the equations and limitations](docs/cfd_showcase.md).
+
 ## Prerequisites
 
 - CMake 3.24+
