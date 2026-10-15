@@ -1,0 +1,10 @@
+{
+  "preset": "taylor_green",
+  "thermal_buoyancy": false,
+  "density_dissipation": 0.0,
+  "pressure_iterations": 512,
+  "domain_box_opacity": 0.06,
+  "camera_yaw": 0.55,
+  "camera_pitch": -0.3,
+  "sources": []
+}

@@ -59,6 +59,7 @@ struct VulkanContext {
     graphics::VolumePipeline volume_pipeline;
     std::array<graphics::VolumeView, 2> pressure_views;
     simulation::PressureSolve pressure;
+    simulation::PressureSettings pressure_settings;
     simulation::Projection projection;
     std::array<bool, 2> pressure_submitted{};
     std::string pressure_status{"Ready"};
@@ -359,7 +360,11 @@ struct graphics::VulkanBackend::Impl {
 };
 
 graphics::VulkanBackend::VulkanBackend(void* native_window, const simulation::InitialConditions& initial,
-    const simulation::SmokeParameters& smoke_parameters, std::span<const std::array<float, 3>> sources) : impl_(std::make_unique<Impl>()) {
+    const simulation::SmokeParameters& smoke_parameters, std::span<const std::array<float, 3>> sources,
+    uint32_t pressure_iterations) : impl_(std::make_unique<Impl>()) {
+    if (pressure_iterations < 1 || pressure_iterations > 4096)
+        throw std::invalid_argument("Pressure iterations must be between 1 and 4096");
+    impl_->vk.pressure_settings.iterations = pressure_iterations;
     impl_->window = static_cast<SDL_Window*>(native_window);
     try {
         impl_->vk.create(impl_->window);
@@ -404,7 +409,7 @@ graphics::SimulationOutput graphics::VulkanBackend::step_simulation(Frame token)
     simulation::record_smoke(vk.smoke, vk.frames[token.frame_index].command_buffer, vk.pending_step, vk.smoke_parameters, vk.sources);
     simulation::record_divergence(vk.divergence, vk.frames[token.frame_index].command_buffer, vk.pending_step.velocity_output);
     const auto pressure = simulation::record_pressure(vk.pressure, vk.frames[token.frame_index].command_buffer,
-        vk.pending_step.dt, vk.pending_step.output.version, token.frame_index);
+        vk.pending_step.dt, vk.pending_step.output.version, token.frame_index, vk.pressure_settings);
     simulation::record_projection(vk.projection, vk.frames[token.frame_index].command_buffer,
         vk.pending_step.velocity_output, pressure, vk.pending_step.dt);
     // Preserve divergence as a view of the final velocity, not the pre-projection RHS.

@@ -127,6 +127,28 @@ double number(Cursor& c, std::string_view path) {
     return value;
 }
 
+float bounded_number(Cursor& c, std::string_view path, double minimum, double maximum) {
+    const double value = number(c, path);
+    if (value < minimum || value > maximum) error(c, path, "number is outside the allowed range");
+    return static_cast<float>(value);
+}
+
+bool boolean(Cursor& c, std::string_view path) {
+    whitespace(c);
+    if (c.text.substr(c.offset, 4) == "true") { c.offset += 4; return true; }
+    if (c.text.substr(c.offset, 5) == "false") { c.offset += 5; return false; }
+    error(c, path, "expected true or false");
+}
+
+uint32_t iterations(Cursor& c, std::string_view path) {
+    whitespace(c);
+    const auto start = c.offset;
+    const double value = number(c, path);
+    if (c.text.substr(start, c.offset - start).find_first_of(".eE") != std::string_view::npos || value < 1 || value > 4096)
+        error(c, path, "expected an integer between 1 and 4096");
+    return static_cast<uint32_t>(value);
+}
+
 void mark(Cursor& c, unsigned& seen, unsigned bit, std::string_view path) {
     if (seen & bit) error(c, path, "duplicate key");
     seen |= bit;
@@ -181,6 +203,37 @@ application::InputDeck application::parse_input_deck(std::string_view text) {
                     } while (take(c, ','));
                     expect(c, ']', name);
                 }
+            } else if (name == "preset") {
+                mark(c, seen, 4, name);
+                expect(c, ':', name);
+                result.preset = key(c, name);
+                if (result.preset != "smoke" && result.preset != "taylor_green" &&
+                    result.preset != "double_shear_layer" && result.preset != "vortex_ring")
+                    error(c, name, "expected smoke, taylor_green, double_shear_layer, or vortex_ring");
+            } else if (name == "thermal_buoyancy") {
+                mark(c, seen, 8, name);
+                expect(c, ':', name);
+                result.thermal_buoyancy = boolean(c, name);
+            } else if (name == "density_dissipation") {
+                mark(c, seen, 16, name);
+                expect(c, ':', name);
+                result.density_dissipation = bounded_number(c, name, 0, 10);
+            } else if (name == "camera_yaw") {
+                mark(c, seen, 32, name);
+                expect(c, ':', name);
+                result.camera_yaw = bounded_number(c, name, -std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+            } else if (name == "camera_pitch") {
+                mark(c, seen, 64, name);
+                expect(c, ':', name);
+                result.camera_pitch = bounded_number(c, name, -1.5, 1.5);
+            } else if (name == "camera_zoom") {
+                mark(c, seen, 128, name);
+                expect(c, ':', name);
+                result.camera_zoom = bounded_number(c, name, 0.5, 3);
+            } else if (name == "pressure_iterations") {
+                mark(c, seen, 256, name);
+                expect(c, ':', name);
+                result.pressure_iterations = iterations(c, name);
             } else error(c, name, "unknown field");
         } while (take(c, ','));
         expect(c, '}', "input");

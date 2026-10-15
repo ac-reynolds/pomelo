@@ -220,6 +220,8 @@ void graphics::record_volume_view(const VolumeView& view, const RenderTarget& ta
                                  VkCommandBuffer command_buffer, const OrbitCamera& camera, float domain_box_opacity) {
     if (!std::isfinite(domain_box_opacity) || domain_box_opacity < 0 || domain_box_opacity > 1)
         throw std::invalid_argument("Domain box opacity must be between zero and one");
+    if (!std::isfinite(camera.zoom) || camera.zoom < 0.5f || camera.zoom > 3.0f)
+        throw std::invalid_argument("Camera zoom must be between 0.5 and 3");
     const auto& pipeline = *view.pipeline;
     const auto& grid = view.field.domain;
     std::array<float, 4> origin_spacing{};
@@ -243,7 +245,7 @@ void graphics::record_volume_view(const VolumeView& view, const RenderTarget& ta
     const float aspect = static_cast<float>(target.extent.width) / target.extent.height;
     const float tangent = std::tan(0.785398163f * 0.5f);
     const float half_fov = std::atan(tangent * std::fmin(aspect, 1.0f));
-    const float distance = 1.1f * radius / std::sin(half_fov);
+    const float distance = 1.1f * radius / (std::sin(half_fov) * camera.zoom);
     // Orbit basis, with rays expressed in grid space.
     const std::array<float, 3> right{c, 0, s};
     const std::array<float, 3> up{s * st, ct, -c * st};
