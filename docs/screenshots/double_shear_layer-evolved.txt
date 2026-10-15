@@ -1,0 +1,16 @@
+Source revision: e6f32e6699e6bd2af0a07c08bad72ad44f77985a
+Deck: inputs/double_shear_layer.json
+Image: docs/screenshots/double_shear_layer-evolved.png
+Selected frame: 240
+Capture trajectory length: 360 frames
+Framebuffer: 1280 x 960; physical grid: 64 x 64 x 64
+Pressure budget: 512 Jacobi iterations per step
+GPU: llvmpipe (LLVM 19.1.7, 256 bits)
+Synchronization validation: enabled, zero errors
+Image encoding: raw framebuffer PPM to lossless PNG; every decoded RGB byte verified identical
+Pressure residual RMS: 0.7373203
+Pressure RHS RMS: 2.579422
+Residual/RHS: 0.28584710
+Default pressure tolerance met: false
+Total trajectory wall time: 723.418 seconds (software Vulkan; other captures ran concurrently)
+Reproduce selected frame: ./build/pomelo_capture inputs/double_shear_layer.json 240 double_shear_layer-evolved.ppm 1280 960

@@ -131,6 +131,9 @@ packaging, tests, and examples live under `python/`; the standalone C++ build
 does not enable the optional `POMELO_BUILD_PYTHON` target by default. See the
 [Python README](python/README.md) for the API contract and test commands.
 
+See [captured output and reproduction commands](docs/captures.md) for the
+showcase images, source revision, and verification limits.
+
 ## Simulation
 
 The default domain has 64³ cell-centered samples, initially at rest with no smoke.
