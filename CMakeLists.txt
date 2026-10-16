@@ -173,8 +173,20 @@ if(BUILD_TESTING)
     target_link_libraries(projection_test PRIVATE graphics)
     add_test(NAME projection COMMAND projection_test)
     set_tests_properties(advection pressure projection PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(demo_gpu_test tests/demo_gpu_test.cpp)
+    target_link_libraries(demo_gpu_test PRIVATE application graphics)
+    add_test(NAME demo_gpu COMMAND demo_gpu_test)
+    set_tests_properties(demo_gpu PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 if(POMELO_BUILD_PYTHON)
     add_subdirectory(python)
+endif()
+
+# Optional reproducible image capture without a window or display server. This
+# uses the application's input-deck settings, GPU simulation, and volume renderer.
+option(POMELO_BUILD_CAPTURE "Build the surface-free Vulkan capture utility" OFF)
+if(POMELO_BUILD_CAPTURE)
+    add_executable(pomelo_capture tools/capture.cpp)
+    target_link_libraries(pomelo_capture PRIVATE application graphics)
 endif()

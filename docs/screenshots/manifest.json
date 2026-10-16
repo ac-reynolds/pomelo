@@ -1,0 +1,146 @@
+{
+  "source_commit": "e6f32e6699e6bd2af0a07c08bad72ad44f77985a",
+  "method": "Surface-free raw native Vulkan framebuffer capture using the same input-deck settings, solver passes, and volume renderer as pomelo",
+  "desktop_window_screenshot": false,
+  "physical_grid": [
+    64,
+    64,
+    64
+  ],
+  "pressure_iterations": 512,
+  "timestep_seconds_float32": 0.01666666753590107,
+  "device": "llvmpipe (LLVM 19.1.7, 256 bits)",
+  "shader_compiler": "Microsoft DXC v1.9.2607",
+  "build_type": "Release",
+  "image_processing": "Lossless PPM-to-PNG encoding only; raw RGB pixel equality verified",
+  "limitations": [
+    "64-cubed semi-Lagrangian flow is numerically diffusive; images are qualitative demonstrations, not converged physical benchmarks.",
+    "512 Jacobi iterations improve projection over the legacy 64-step budget but do not meet the default pressure residual tolerance in these captures.",
+    "Raw UNORM framebuffer colors can differ from an sRGB desktop swapchain."
+  ],
+  "images": [
+    {
+      "image": "docs/screenshots/taylor_green-initial.png",
+      "deck": "inputs/taylor_green.json",
+      "frame": 0,
+      "time_seconds": 0.0,
+      "resolution": [
+        1280,
+        960
+      ],
+      "png_sha256": "3eb4885c073e531815126084db85a79b8fb2725db2e00e29b76f884c55721b00",
+      "rgb_sha256": "15a10cc8429b88d5a3eda4cb404fd27c99130a7ffecbc6393ac03238766ac419",
+      "deck_sha256": "f7fe681d82554a9b8f8ebca4984bd5f0755e8df08dcb0474fcb9aaa4ec09dd84",
+      "pixel_conversion_verified": true,
+      "synchronization_validation_errors": 0,
+      "pressure_diagnostics": null,
+      "capture_trajectory_frames": 0,
+      "capture_trajectory_elapsed_seconds": 0.741
+    },
+    {
+      "image": "docs/screenshots/taylor_green-evolved.png",
+      "deck": "inputs/taylor_green.json",
+      "frame": 60,
+      "time_seconds": 1.0000000521540642,
+      "resolution": [
+        1280,
+        960
+      ],
+      "png_sha256": "8d283735280990e51c3a320c23c1d0ad751596b94005a02f59f68117ce79f383",
+      "rgb_sha256": "c89374f81e0d5da3fb22cffe1bb4effd3c4fa4968c7fe9465c7588dac7d7b06b",
+      "deck_sha256": "f7fe681d82554a9b8f8ebca4984bd5f0755e8df08dcb0474fcb9aaa4ec09dd84",
+      "pixel_conversion_verified": true,
+      "synchronization_validation_errors": 0,
+      "pressure_diagnostics": {
+        "residual_rms": 0.1101463,
+        "rhs_rms": 1.439826,
+        "residual_over_rhs": 0.07649972982846538,
+        "default_pressure_tolerance_met": false
+      },
+      "capture_trajectory_frames": 60,
+      "capture_trajectory_elapsed_seconds": 110.35499999999999
+    },
+    {
+      "image": "docs/screenshots/vortex_ring-initial.png",
+      "deck": "inputs/vortex_ring.json",
+      "frame": 0,
+      "time_seconds": 0.0,
+      "resolution": [
+        1280,
+        960
+      ],
+      "png_sha256": "923fe27f9a224a9cdc830bc0d986a21b6c232d5999e23281d6b6fa99bf905068",
+      "rgb_sha256": "af3e14632a1dc4124ddf76935b7a990430f19aa5d6a716ed244ce45bdf974d46",
+      "deck_sha256": "72a126938f8d8a77e9a4daea94a7174d9c2ad2a45efb425ac61bc864dd6eef5c",
+      "pixel_conversion_verified": true,
+      "synchronization_validation_errors": 0,
+      "pressure_diagnostics": null,
+      "capture_trajectory_frames": 0,
+      "capture_trajectory_elapsed_seconds": 2.975
+    },
+    {
+      "image": "docs/screenshots/vortex_ring-evolved.png",
+      "deck": "inputs/vortex_ring.json",
+      "frame": 30,
+      "time_seconds": 0.5000000260770321,
+      "resolution": [
+        1280,
+        960
+      ],
+      "png_sha256": "ed2f6a45a7f1f305f6848fe4c8a28c4bb62cc4940c63fe4f493c6d06df1e8332",
+      "rgb_sha256": "23b46343954da80871c612e1343abfb7e86dcd3bdeffbbf04e143eb3b26c7675",
+      "deck_sha256": "72a126938f8d8a77e9a4daea94a7174d9c2ad2a45efb425ac61bc864dd6eef5c",
+      "pixel_conversion_verified": true,
+      "synchronization_validation_errors": 0,
+      "pressure_diagnostics": {
+        "residual_rms": 0.09951919,
+        "rhs_rms": 1.43253,
+        "residual_over_rhs": 0.06947092905558697,
+        "default_pressure_tolerance_met": false
+      },
+      "capture_trajectory_frames": 60,
+      "capture_trajectory_elapsed_seconds": 192.694
+    },
+    {
+      "image": "docs/screenshots/double_shear_layer-initial.png",
+      "deck": "inputs/double_shear_layer.json",
+      "frame": 0,
+      "time_seconds": 0.0,
+      "resolution": [
+        1280,
+        960
+      ],
+      "png_sha256": "7ff1d8c6590d2bb92562b0c4b6c62adfb6b93022f911e76c3cebc9ec8e389cb3",
+      "rgb_sha256": "6acddb7f3f3ce24e4fcf252d8a7698adcec7dde9eb03d711c85176228bcfcf71",
+      "deck_sha256": "c5aed7dc60227ef60d2c0245b9f56d0e658a72e7adf4e100b101eb43e1708928",
+      "pixel_conversion_verified": true,
+      "synchronization_validation_errors": 0,
+      "pressure_diagnostics": null,
+      "capture_trajectory_frames": 0,
+      "capture_trajectory_elapsed_seconds": 0.748
+    },
+    {
+      "image": "docs/screenshots/double_shear_layer-evolved.png",
+      "deck": "inputs/double_shear_layer.json",
+      "frame": 240,
+      "time_seconds": 4.000000208616257,
+      "resolution": [
+        1280,
+        960
+      ],
+      "png_sha256": "494fc4606bab04b548978ddeb11ec342b1fd85c998d727dc947133dc095bd70f",
+      "rgb_sha256": "3650faee55c78480cfdb814077a89ee9844db16fb70722db51852b46002d0c4e",
+      "deck_sha256": "c5aed7dc60227ef60d2c0245b9f56d0e658a72e7adf4e100b101eb43e1708928",
+      "pixel_conversion_verified": true,
+      "synchronization_validation_errors": 0,
+      "pressure_diagnostics": {
+        "residual_rms": 0.7373203,
+        "rhs_rms": 2.579422,
+        "residual_over_rhs": 0.2858471006295209,
+        "default_pressure_tolerance_met": false
+      },
+      "capture_trajectory_frames": 360,
+      "capture_trajectory_elapsed_seconds": 723.418
+    }
+  ]
+}

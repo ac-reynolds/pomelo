@@ -1,0 +1,10 @@
+{
+  "preset": "double_shear_layer",
+  "thermal_buoyancy": false,
+  "density_dissipation": 0.0,
+  "pressure_iterations": 512,
+  "domain_box_opacity": 0.035,
+  "camera_yaw": 0.0,
+  "camera_pitch": 0.0,
+  "sources": []
+}

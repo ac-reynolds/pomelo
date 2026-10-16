@@ -24,11 +24,11 @@ void application::run(const Settings& settings, void (*poll_hook)()) {
     validate_settings(deck, domain);
     if (active_run.test_and_set()) throw std::runtime_error("A simulation is already running");
     try {
-        const auto initial = simulation::smoke_initial_conditions();
-        const auto smoke_parameters = simulation::smoke_parameters(domain);
+        const auto initial = make_initial_conditions(deck, domain);
+        const auto smoke_parameters = make_smoke_parameters(deck, domain);
         Window window;
-        graphics::VulkanBackend graphics(window.native_window(), initial, smoke_parameters, deck.sources);
-        graphics::OrbitCamera camera;
+        graphics::VulkanBackend graphics(window.native_window(), initial, smoke_parameters, deck.sources, deck.pressure_iterations);
+        graphics::OrbitCamera camera{deck.camera_yaw, deck.camera_pitch, deck.camera_zoom};
         float orbit_dx{}, orbit_dy{};
         while (true) {
             if (poll_hook) poll_hook();

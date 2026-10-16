@@ -1,0 +1,16 @@
+Source revision: e6f32e6699e6bd2af0a07c08bad72ad44f77985a
+Deck: inputs/taylor_green.json
+Image: docs/screenshots/taylor_green-evolved.png
+Selected frame: 60
+Capture trajectory length: 60 frames
+Framebuffer: 1280 x 960; physical grid: 64 x 64 x 64
+Pressure budget: 512 Jacobi iterations per step
+GPU: llvmpipe (LLVM 19.1.7, 256 bits)
+Synchronization validation: enabled, zero errors
+Image encoding: raw framebuffer PPM to lossless PNG; every decoded RGB byte verified identical
+Pressure residual RMS: 0.1101463
+Pressure RHS RMS: 1.439826
+Residual/RHS: 0.07649973
+Default pressure tolerance met: false
+Total trajectory wall time: 110.355 seconds (software Vulkan; other captures ran concurrently)
+Reproduce selected frame: ./build/pomelo_capture inputs/taylor_green.json 60 taylor_green-evolved.ppm 1280 960

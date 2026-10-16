@@ -30,8 +30,43 @@ simulator defaults: grid-line opacity 0.65 and a single built-in emitter.
 Omitted sources or `None` selects that emitter; `[]` disables injection. Opacity
 ranges from zero to one and is independent of smoke opacity. Sources are finite
 world-space triples with positive Y upward, and emitters must fit entirely in
-the fixed 64³ domain spanning [-1, 1] on each axis. Other simulator parameters
-retain their native defaults.
+the fixed 64³ domain spanning [-1, 1] on each axis.
+
+The classic-flow settings are available through the same API:
+
+```python
+settings = pomelo.Settings(
+    preset="taylor_green",
+    sources=[],
+    thermal_buoyancy=False,
+    density_dissipation=0,
+    pressure_iterations=512,
+    domain_box_opacity=0.06,
+    camera_yaw=0.55,
+    camera_pitch=-0.3,
+    camera_zoom=1.0,
+)
+pomelo.run(settings)
+```
+
+`preset` is `"smoke"` (default), `"taylor_green"`, `"double_shear_layer"`, or
+`"vortex_ring"`. Choosing a preset changes only initial fields; it does not
+implicitly replace sources or other settings. `thermal_buoyancy` is a strict
+Python bool, defaulting to `True`; `False` disables heat injection and buoyancy.
+`density_dissipation` is an independent rate in simulated seconds⁻¹, from 0 to
+10 (default 0.2). Passive-dye demos set it to zero and set `sources=[]`.
+
+`camera_yaw` and `camera_pitch` are radians; defaults are 0 and -0.35. Pitch is
+limited to [-1.5, 1.5]. `camera_zoom` ranges from 0.5 to 3 (default 1), with
+larger values moving closer. These are initial presentation settings, not
+simulation parameters. All are writable properties and included in `repr`.
+`pressure_iterations` is an integer from 1 to 4096 (default 64); the showcase
+decks use 512 to improve the existing Jacobi pressure solve at additional GPU
+cost. Booleans and floats are rejected, even if a float has an integer value.
+Increasing this budget reduces pressure residuals but does not establish solver
+convergence. The equations and boundary conditions are unchanged.
+The dye represents a tracer in a filled, single-phase domain; no free-surface
+liquid model is implemented. See [the showcase notes](../docs/cfd_showcase.md).
 
 Reading `settings.sources` returns a copy. To edit sources, assign a replacement:
 
@@ -42,10 +77,11 @@ settings.sources = sources
 ```
 
 Numeric conversion errors raise `TypeError` or `ValueError` at construction or
-assignment. `run` checks opacity and emitter bounds before starting graphics and
+assignment. `run` checks numeric ranges and emitter bounds before starting graphics and
 raises `ValueError` for invalid settings. Errors identify fields such as
-`sources[1].y`. Booleans, strings, non-finite numbers, float32 overflow, and
-malformed coordinate triples are rejected. Native startup/execution failures
+`sources[1].y`. Numeric fields reject booleans, strings, non-finite numbers,
+and float32 overflow; malformed coordinate triples are rejected. Unknown presets
+raise `ValueError`, and `thermal_buoyancy` rejects non-bool values. Native startup/execution failures
 raise `RuntimeError`; normal window closure returns `None`.
 
 Call `run` on the Python main thread in a normal script. It blocks while releasing

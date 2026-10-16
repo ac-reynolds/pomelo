@@ -1,6 +1,25 @@
 # Pomelo
 
-A C++20 smoke simulator using SDL3 and Vulkan. Compute shaders evolve density, temperature, and velocity, and a full-window ray marcher renders the smoke density.
+A C++20 smoke and single-phase flow visualizer using SDL3 and Vulkan. Compute shaders evolve a density/tracer field, temperature, and velocity, and a full-window ray marcher renders the scalar field.
+
+## Flow previews
+
+![Double shear-layer evolution from step 0 to step 360](docs/screenshots/double_shear_layer-timelapse.gif)
+
+**Double shear layer:** a looping timelapse of seven native Vulkan captures,
+sampled every **60 steps / 1 simulated second**, from step 0 to 360 (0–6 simulated
+seconds). Each snapshot is held for one second; there are no interpolated
+frames. The GIF is resized to 640×480 and palette-encoded. The later softening
+reflects numerical diffusion in the existing solver.
+
+![Taylor–Green dye sheets after 60 simulation steps](docs/screenshots/taylor_green-evolved.png)
+
+**Taylor–Green:** folding passive-dye sheets after **60 steps / 1 simulated
+second**, shown in an unmodified native-renderer capture.
+
+Both previews use the 64³ periodic single-phase solver with 512 pressure
+iterations. See [all three demos, full-resolution stills, and reproduction
+commands](docs/captures.md) and [the equations and limitations](docs/cfd_showcase.md).
 
 ## Prerequisites
 
@@ -63,7 +82,7 @@ Supply a JSON deck as the optional first argument:
 }
 ```
 
-Both fields are required. Opacity ranges from zero (hidden) to one (opaque grid
+The two fields above remain required. Opacity ranges from zero (hidden) to one (opaque grid
 lines), without changing smoke opacity. Source centers use world coordinates,
 with positive Y upward; the default domain spans `[-1, 1]` on each axis. The whole
 emitter must fit inside the box. A deck replaces the built-in source list; an
@@ -74,7 +93,8 @@ JSON comments, trailing commas, duplicate keys, and unknown fields are rejected.
 Invalid decks stop startup with a field-specific error. The application loads
 and validates the deck before creating the window or GPU resources, then passes
 sources to the simulator. No new library dependency is needed. Running without
-a deck keeps the default single source. See `plans/input_format.md` for the spec.
+a deck keeps the default single source. See [the input format](plans/input_format.md)
+for optional flow, camera, and thermal settings.
 
 | Deck | Setup |
 | --- | --- |
@@ -83,6 +103,37 @@ a deck keeps the default single source. See `plans/input_format.md` for the spec
 | `inputs/staggered.json` | Three emitters at different heights and depths |
 | `inputs/smoke_only.json` | Two overlapping emitters with the box hidden |
 | `inputs/empty_box.json` | Fully visible box with no smoke injection |
+
+## Classic flow demos
+
+The same executable accepts three additional decks:
+
+```sh
+./build/pomelo inputs/taylor_green.json
+./build/pomelo inputs/double_shear_layer.json
+./build/pomelo inputs/vortex_ring.json
+```
+
+- **Taylor–Green:** a three-dimensional periodic vortex field folding two dye sheets
+- **Double shear layer:** two counter-flowing layers with a small sinusoidal perturbation and passive dye at the interfaces
+- **Vortex ring:** a localized, regularized vortex ring carrying a toroidal dye marker
+
+These decks disable thermal forcing and explicit tracer dissipation and have no
+ongoing emitters. They use the existing advection, pressure, and projection passes.
+Their `pressure_iterations: 512` increases the existing Jacobi solve budget
+to reduce divergence compared with the legacy default of 64; it costs more GPU
+time and is not a convergence guarantee.
+The rendered scalar is passive dye in a filled, single-phase periodic domain.
+There is no liquid/air interface, free surface, splashing, or new liquid solver.
+They are qualitative classic-flow demonstrations, not Reynolds-number-controlled
+benchmarks: the solver has no explicit viscosity and its advection introduces
+numerical diffusion. Initial conditions use the actual discrete divergence stencil.
+See [the showcase notes](docs/cfd_showcase.md) for formulas, limitations, and captures.
+
+Each deck sets an initial camera; drag to orbit as usual. `camera_zoom` changes
+framing only. `thermal_buoyancy: false` turns off heat injection and buoyancy;
+set `density_dissipation: 0` separately to retain passive dye as far as the
+advection scheme permits. Legacy decks retain their original defaults.
 
 ## Python API
 
@@ -98,6 +149,9 @@ Invalid settings raise exceptions before graphics startup. Python bindings,
 packaging, tests, and examples live under `python/`; the standalone C++ build
 does not enable the optional `POMELO_BUILD_PYTHON` target by default. See the
 [Python README](python/README.md) for the API contract and test commands.
+
+See [captured output and reproduction commands](docs/captures.md) for the
+showcase images, source revision, and verification limits.
 
 ## Simulation
 
@@ -122,7 +176,7 @@ The advection test uses a graphics/compute Vulkan device (a software Vulkan driv
 also works) and automatically enables synchronization validation when the Khronos
 validation layer is available. It checks uniform preservation, periodic transport,
 CPU/GPU agreement, velocity self-advection, renderer image selection, and two frames in
-flight with offscreen target resizing. GPU readback is restricted to tests.
+flight with offscreen target resizing. GPU readback is restricted to tests and the optional offscreen capture tool.
 
 ## Source layout
 
@@ -146,5 +200,6 @@ focused source files within one library, not separate build targets.
 SDL3 is fetched as a third-party dependency. `shaders/` contains HLSL
 sources and shared sampling helpers; `deployment/` contains build helpers.
 
-The R32 float divergence image is recomputed with periodic central differences
+The R32 float divergence image is recomputed with periodic backward differences
 before the pressure solve and after projection as a diagnostic of the final velocity.
+Projection uses the matching forward pressure gradient.

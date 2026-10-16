@@ -1,0 +1,11 @@
+{
+  "preset": "vortex_ring",
+  "thermal_buoyancy": false,
+  "density_dissipation": 0.0,
+  "pressure_iterations": 512,
+  "domain_box_opacity": 0.025,
+  "camera_yaw": 0.45,
+  "camera_pitch": -0.55,
+  "camera_zoom": 2.0,
+  "sources": []
+}

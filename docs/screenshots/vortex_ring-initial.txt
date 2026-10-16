@@ -1,0 +1,12 @@
+Source revision: e6f32e6699e6bd2af0a07c08bad72ad44f77985a
+Deck: inputs/vortex_ring.json
+Image: docs/screenshots/vortex_ring-initial.png
+Selected frame: 0
+Capture trajectory length: 0 frames
+Framebuffer: 1280 x 960; physical grid: 64 x 64 x 64
+Pressure budget: 512 Jacobi iterations per step
+GPU: llvmpipe (LLVM 19.1.7, 256 bits)
+Synchronization validation: enabled, zero errors
+Image encoding: raw framebuffer PPM to lossless PNG; every decoded RGB byte verified identical
+Total trajectory wall time: 2.975 seconds (software Vulkan; other captures ran concurrently)
+Reproduce selected frame: ./build/pomelo_capture inputs/vortex_ring.json 0 vortex_ring-initial.ppm 1280 960

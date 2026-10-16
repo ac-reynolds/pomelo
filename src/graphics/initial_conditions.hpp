@@ -19,5 +19,9 @@ InitialConditions initial_conditions(std::array<uint32_t, 3> dimensions = {64, 6
 constexpr graphics::FieldDomain smoke_domain() { return {{64, 64, 64}, {-1, -1, -1}, 2.0f / 64}; }
 InitialConditions smoke_initial_conditions(std::array<uint32_t, 3> dimensions = smoke_domain().dimensions,
     std::array<float, 3> origin = smoke_domain().origin, float spacing = smoke_domain().spacing);
+enum class DemoPreset { taylor_green, double_shear_layer, vortex_ring };
+// Periodic single-phase flow initializations. Density is a passive visualization
+// tracer, not mass density or a liquid surface; temperature starts at ambient.
+InitialConditions demo_initial_conditions(DemoPreset, const graphics::FieldDomain& = smoke_domain());
 void validate_initial_conditions(const InitialConditions&);
 }

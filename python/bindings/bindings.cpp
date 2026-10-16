@@ -1,4 +1,5 @@
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
 #include "application/application.hpp"
 #include <cmath>
 #include <limits>
@@ -7,6 +8,31 @@
 
 namespace nb = nanobind;
 namespace {
+std::string preset(nb::handle value) {
+    if (!PyUnicode_Check(value.ptr())) throw nb::type_error("preset: expected a string");
+    const auto result = nb::cast<std::string>(value);
+    if (result != "smoke" && result != "taylor_green" && result != "double_shear_layer" && result != "vortex_ring")
+        throw nb::value_error("preset: expected smoke, taylor_green, double_shear_layer, or vortex_ring");
+    return result;
+}
+
+bool boolean(nb::handle value, const char* path) {
+    if (!PyBool_Check(value.ptr())) throw nb::type_error((std::string(path) + ": expected bool").c_str());
+    return value.ptr() == Py_True;
+}
+
+uint32_t iterations(nb::handle value) {
+    if (PyBool_Check(value.ptr()) || !PyLong_Check(value.ptr()))
+        throw nb::type_error("pressure_iterations: expected an integer");
+    const auto result = PyLong_AsUnsignedLong(value.ptr());
+    if (PyErr_Occurred()) {
+        PyErr_Clear();
+        throw nb::value_error("pressure_iterations: must be between 1 and 4096");
+    }
+    if (result < 1 || result > 4096) throw nb::value_error("pressure_iterations: must be between 1 and 4096");
+    return static_cast<uint32_t>(result);
+}
+
 float number(nb::handle value, const std::string& path) {
     if (PyBool_Check(value.ptr()) || (!PyLong_Check(value.ptr()) && !PyFloat_Check(value.ptr())))
         throw nb::type_error((path + ": expected an integer or float").c_str());
@@ -61,20 +87,48 @@ void check_signals() {
 
 NB_MODULE(_native, m) {
     nb::class_<application::Settings>(m, "Settings", "Editable simulation configuration; sources are copied on access.")
-        .def("__init__", [](application::Settings* self, nb::object opacity, nb::object input_sources) {
+        .def("__init__", [](application::Settings* self, nb::object opacity, nb::object input_sources,
+            nb::object input_preset, nb::object thermal, nb::object dissipation, nb::object yaw, nb::object pitch,
+            nb::object zoom, nb::object pressure_budget) {
             auto settings = application::default_settings();
             settings.domain_box_opacity = number(opacity, "domain_box_opacity");
             settings.sources = sources(input_sources);
+            settings.preset = preset(input_preset);
+            settings.thermal_buoyancy = boolean(thermal, "thermal_buoyancy");
+            settings.density_dissipation = number(dissipation, "density_dissipation");
+            settings.camera_yaw = number(yaw, "camera_yaw");
+            settings.camera_pitch = number(pitch, "camera_pitch");
+            settings.camera_zoom = number(zoom, "camera_zoom");
+            settings.pressure_iterations = iterations(pressure_budget);
             new (self) application::Settings(std::move(settings));
-        }, nb::kw_only(), nb::arg("domain_box_opacity") = application::default_settings().domain_box_opacity, nb::arg("sources") = nb::none())
+        }, nb::kw_only(), nb::arg("domain_box_opacity") = application::default_settings().domain_box_opacity,
+            nb::arg("sources") = nb::none(), nb::arg("preset") = "smoke", nb::arg("thermal_buoyancy") = true,
+            nb::arg("density_dissipation") = 0.2f, nb::arg("camera_yaw") = 0.0f, nb::arg("camera_pitch") = -0.35f,
+            nb::arg("camera_zoom") = 1.0f, nb::arg("pressure_iterations") = 64)
         .def_prop_rw("domain_box_opacity", [](const application::Settings& s) { return s.domain_box_opacity; },
             [](application::Settings& s, nb::object v) { s.domain_box_opacity = number(v, "domain_box_opacity"); })
         .def_prop_rw("sources", [](const application::Settings& s) { return source_list(s); },
             [](application::Settings& s, nb::object v) { s.sources = sources(v); },
             "Returns a copied list; assign a replacement list to edit sources.")
+        .def_prop_rw("preset", [](const application::Settings& s) { return s.preset; },
+            [](application::Settings& s, nb::object v) { s.preset = preset(v); })
+        .def_prop_rw("thermal_buoyancy", [](const application::Settings& s) { return s.thermal_buoyancy; },
+            [](application::Settings& s, nb::object v) { s.thermal_buoyancy = boolean(v, "thermal_buoyancy"); })
+        .def_prop_rw("density_dissipation", [](const application::Settings& s) { return s.density_dissipation; },
+            [](application::Settings& s, nb::object v) { s.density_dissipation = number(v, "density_dissipation"); })
+        .def_prop_rw("camera_yaw", [](const application::Settings& s) { return s.camera_yaw; },
+            [](application::Settings& s, nb::object v) { s.camera_yaw = number(v, "camera_yaw"); })
+        .def_prop_rw("camera_pitch", [](const application::Settings& s) { return s.camera_pitch; },
+            [](application::Settings& s, nb::object v) { s.camera_pitch = number(v, "camera_pitch"); })
+        .def_prop_rw("camera_zoom", [](const application::Settings& s) { return s.camera_zoom; },
+            [](application::Settings& s, nb::object v) { s.camera_zoom = number(v, "camera_zoom"); })
+        .def_prop_rw("pressure_iterations", [](const application::Settings& s) { return s.pressure_iterations; },
+            [](application::Settings& s, nb::object v) { s.pressure_iterations = iterations(v); })
         .def("__repr__", [](const application::Settings& s) {
-            return nb::str("Settings(domain_box_opacity={:g}, sources={})").attr("format")(
-                s.domain_box_opacity, source_list(s));
+            return nb::str("Settings(domain_box_opacity={:g}, sources={}, preset={!r}, thermal_buoyancy={}, "
+                "density_dissipation={:g}, camera_yaw={:g}, camera_pitch={:g}, camera_zoom={:g}, pressure_iterations={})").attr("format")(
+                s.domain_box_opacity, source_list(s), s.preset, s.thermal_buoyancy,
+                s.density_dissipation, s.camera_yaw, s.camera_pitch, s.camera_zoom, s.pressure_iterations);
         });
     m.def("default_settings", [] { return application::default_settings(); }, "Return fresh simulator defaults.");
     m.def("run", [](const application::Settings& settings) {

@@ -26,7 +26,8 @@ struct Frame {
 class VulkanBackend {
 public:
     VulkanBackend(void* native_window, const simulation::InitialConditions& initial,
-                  const simulation::SmokeParameters&, std::span<const std::array<float, 3>> sources);
+                  const simulation::SmokeParameters&, std::span<const std::array<float, 3>> sources,
+                  uint32_t pressure_iterations = 64);
     ~VulkanBackend();
     VulkanBackend(VulkanBackend&&) = delete;
     VulkanBackend& operator=(VulkanBackend&&) = delete;
